@@ -16,6 +16,8 @@ import os
 import logging
 import logging.config
 import yaml
+import sys
+import sqlparse
 
 # Load the config file
 with open('logging_config.yaml', 'rt') as f:
@@ -26,6 +28,16 @@ logging.config.dictConfig(config)
 
 # create logger
 logger = logging.getLogger('nl2sql')
+
+# Override default uncaught exception handler to log all exceptions using the custom logger
+def handle_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = handle_exception
 
 source_type='BigQuery'
 
@@ -54,7 +66,6 @@ ENABLE_ANALYTICS=False
 DATASET_NAME='nl2sql'
 DATASET_LOCATION='EU'
 LOG_TABLE_NAME='query_logs'
-FULL_LOG_TEXT=''
 
 
 # Palm Models to use
@@ -77,6 +88,37 @@ def createModel(PROJECT_ID, REGION, model_id):
   else:
     raise ValueError
   return model
+
+class UserSession:
+   
+  user_history = []
+
+  def __init__(self, prompt_init):
+    context_prompt = {
+      'role': 'user',
+      'parts': [prompt_init]
+    }
+    self.user_history.append(context_prompt)
+
+  def add_user_question(self, question):
+    message = {
+      'role': 'user',
+      'parts': [question]
+    }
+    self.user_history.append(message)
+  
+  def add_model_answer(self, answer):
+    message = {
+      'role': 'model',
+      'parts': [answer]
+    }
+    self.user_history.append(message)
+    
+  def get_messages(self):
+    return self.history
+  
+  def reset_history(self):
+    self.history = []
 
 # Define BigQuery Dictionary Queries and Helper Functions
 
@@ -210,7 +252,11 @@ def get_column_sample(columns_df):
       column_samples_df=schema_generator(get_column_sample_sql)
       sample_column_list.append(column_samples_df['sample_values'].to_string(index=False))
     except Exception as err:
-      logger.error("Error gathering samples for column " + row["column_name"] + " - with error: " + err)
+      column_name = str(row["column_name"])
+      if "Reason: 400 Cannot access field" in err.args[0] and ("STRUCT" in err.args[0] or "ARRAY" in err.arg[0]):
+        logger.info("Cannot parse column '" + column_name + "' with type STRUCT and/or ARRAY, skipping")
+      else:
+        logger.error("Error gathering samples for column " + str(row["column_name"]) + " - with error: " + str(err[0]))
       sample_column_list.append('')
 
 
@@ -239,7 +285,9 @@ def insert_sample_queries_lookup(tables_list):
       table_queries_samples = json.load(queries_str)
       queries_samples.append(table_queries_samples)
       for sql_query in queries_samples[0]:
-        pgvector_handler.add_vector_sql_collection(schema, sql_query['question'], sql_query['sql_query'], 'Y')
+        question = sql_query['question']
+        question_text_embedding = pgvector_handler.text_embedding(question)
+        pgvector_handler.add_vector_sql_collection(schema, sql_query['question'], sql_query['sql_query'], question_text_embedding, 'Y')
   return queries_samples
 
 
@@ -438,7 +486,6 @@ def generate_sql(context_prompt):
       "top_p": 1
   })
   generated_sql = generated_sql_json.candidates[0].content.parts[0].text
-  logger.info("Generated SQL:\n" + generated_sql)
   return generated_sql
 
 def chat_send_message(chat_session, context_prompt):
@@ -455,8 +502,7 @@ def clean_json(result):
   result = result.replace("```json", "").replace("```", "")
   return result
 
-def gen_dyn_rag_sql(question,table_result_joined,column_result_joined,similar_questions):
-  global FULL_LOG_TEXT
+def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   context_prompt = f"""
 
@@ -502,8 +548,6 @@ def gen_dyn_rag_sql(question,table_result_joined,column_result_joined,similar_qu
     #{column_result_joined}
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
-  FULL_LOG_TEXT= FULL_LOG_TEXT + '\n LLM GEN SQL Prompt:  ... \n'
-  FULL_LOG_TEXT= FULL_LOG_TEXT + '\n' + context_prompt + '\n'
 
   context_query = generate_sql(context_prompt)
 
@@ -517,41 +561,6 @@ def gen_dyn_rag_sql(question,table_result_joined,column_result_joined,similar_qu
     # `bigquery-public-data.thelook_ecommerce.orders` o,`bigquery-public-data.thelook_ecommerce.users` u
     #   where o.user_id = u.id
     #   group by email;
-
-def validate_sql_syntax(question, generated_sql, table_result_joined,column_result_joined,similar_questions):
-
-  #logger.info(columns_df.to_markdown(index = False))
-
-  context_prompt = f"""
-
-    Classify the SQL query (generated sql) as valid or invalid.
-
-    Instructions:
-    - Use ONLY the column names (column_name) mentioned in Table Schema.
-    - DO NOT USE any other column names outside the schema in this context.
-    - To be considered valid, a SQL must be semantically correct, use correct ANSI SQL syntax and answer the question below.
-    - Respond using a valid JSON format with only two elements: valid and errors. Remove ```json and ``` from the output
-    - JSON must be valid. In the JSON data format, the keys must be enclosed in double quotes. Document must start with LEFT CURLY BRACKET character and end with the RIGHT CURLY BRACKET character
-
-    Table Schema:
-    {table_result_joined}
-
-    {similar_questions}
-
-    Question:
-    {question}
-
-    SQL Query:
-    {generated_sql}
-
-  """
-
-#    Column Descriptions:
-#    {column_result_joined}
-
-  context_query = generate_sql(context_prompt)
-
-  return clean_json(context_query)
 
 
 def test_sql_plan_execution(generated_sql):
@@ -582,7 +591,6 @@ def test_sql_plan_execution(generated_sql):
 
 
 def init_chat():
-  global FULL_LOG_TEXT
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
 
   context_prompt = f"""
@@ -616,15 +624,15 @@ def init_chat():
       - Project_id is case sensitive. DO NOT uppercase or lowercase the project_id.
 
   """
-  logger.info('\n Initializing code chat model ...')
-  FULL_LOG_TEXT= FULL_LOG_TEXT + '\n Initializing code chat model ... \n'
+  logger.info('Initializing code chat model ...')
   chat_session = chat_model.start_chat(context=context_prompt)
+  logger.info('Code chat model initialized')
   # context_prompt
   return chat_session
 
 
 
-def rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined , column_result_joined, error_msg, similar_questions):
+def rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, error_msg, similar_questions):
 
   context_prompt = f"""
     What is an alternative SQL statement to address the error mentioned below?
@@ -664,7 +672,6 @@ def rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined 
 
 
 def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, failure_step, error_msg):
-  global FULL_LOG_TEXT
 
   if ENABLE_ANALYTICS is True:
       logger.debug('\nInside the Append to BQ block\n')
@@ -686,8 +693,7 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
           'need_rewrite',
           'failure_step',
           'error_msg',
-          'execution_time',
-          'full_log'
+          'execution_time'
           ])
 
       new_row = {
@@ -702,8 +708,7 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
           "need_rewrite":need_rewrite,
           "failure_step":failure_step,
           "error_msg":error_msg,
-          "execution_time": now,
-          "full_log": FULL_LOG_TEXT
+          "execution_time": now
         }
 
       df1.loc[len(df1)] = new_row
@@ -748,18 +753,33 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
 
       # df1.loc[len(df1)] = new_row
       # pandas_gbq.to_gbq(df1, table_id, project_id=PROJECT_ID, if_exists='append')  # replace to replace table; append to append to a table
-      logger.info('\n Query added to BQ log table \n')
-      FULL_LOG_TEXT= FULL_LOG_TEXT + '\n Query added to BQ log table \n'
+      logger.info('Query added to BQ log table')
       return 'Row added'
   else:
-    logger.info('\n BQ Analytics is disabled so query was not added to BQ log table \n')
-    FULL_LOG_TEXT= FULL_LOG_TEXT + '\n BQ Analytics is disabled so query was not added to BQ log table \n'
+    logger.info('BQ Analytics is disabled so query was not added to BQ log table')
 
     return 'BQ Analytics is disabled'
 
 
 
 def call_gen_sql(question):
+
+  total_start_time = time.time()
+  generated_valid_sql = ''
+  sql_result = ''
+
+  embedding_duration = ''
+  similar_questions_duration = ''
+  table_matching_duration = ''
+  sql_generation_duration = ''
+  bq_validation_duration = ''
+  bq_execution_duration = ''
+
+  logger.info("Creating text embedding from question...")
+  start_time = time.time()
+  question_text_embedding = pgvector_handler.text_embedding(question)
+  embedding_duration = time.time() - start_time
+  logger.info("Text embedding created")
 
   # Overwriting for testing purposes
   #INJECT_ONE_ERROR = True
@@ -772,14 +792,17 @@ def call_gen_sql(question):
   #search_sql_vector_by_id_return = pgvector_handler.search_sql_vector_by_id(schema, question,'Y')
   logger.info("Look for exact same question in pgVector...")
   search_sql_vector_by_id_return = 'SQL Not Found in Vector DB'
+
   # search_sql_vector_by_id_return = "SQL Not Found in Vector DB"
 
   if search_sql_vector_by_id_return == 'SQL Not Found in Vector DB':   ### Only go thru the loop if hash of the question is not found in Vector.
 
         logger.info("Did not find same question in DB")
         logger.info("Searching for similar questions in DB...")
+        start_time = time.time()
         # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
-        similar_questions_return = pgvector_handler.search_sql_nearest_vector(schema, question,'Y')
+        similar_questions_return = pgvector_handler.search_sql_nearest_vector(schema, question, question_text_embedding, 'Y')
+        similar_questions_duration = time.time() - start_time
         logger.info("Found similar questions:\n" + str(similar_questions_return))
 
         unrelated_question=False
@@ -788,11 +811,17 @@ def call_gen_sql(question):
         retry_count=0
         chat_session=None
         logger.info("Now looking for appropriate tables in Vector to answer the question...")
-        table_result_joined,column_result_joined = pgvector_handler.get_tables_colums_vector(question)
+        start_time = time.time()
+        table_result_joined = pgvector_handler.get_tables_colums_vector(question, question_text_embedding)
+        table_matching_duration = time.time() - start_time
 
         if len(table_result_joined) > 0 :
-            logger.info("Found matching tables: " + str(table_result_joined))
-            generated_sql=gen_dyn_rag_sql(question,table_result_joined,column_result_joined, similar_questions_return)
+            logger.info("Found matching tables")
+            start_time = time.time()
+            logger.info("Generating SQL query using LLM...")
+            generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
+            
+            sql_generation_duration = time.time() - start_time
             if 'unrelated_answer' in generated_sql :
               stop_loop=True
               #logger.info('Inside if statement to check for unrelated question...')
@@ -806,82 +835,72 @@ def call_gen_sql(question):
 
         while (stop_loop is False):
 
-            ### Syntax validation via LLM block
-            logger.info('Calling LLM to validate the generated SQL ... \n')
-            valid_sql_return=validate_sql_syntax(question, generated_sql, table_result_joined , column_result_joined,similar_questions_return)
-            logger.debug('Return JSON from validation: ' + valid_sql_return)
+          if INJECT_ONE_ERROR is True:
+            if retry_count < 1:
+              logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
+              generated_sql=generated_sql + ' ROWID'
 
-            json_syntax_result=json.loads(valid_sql_return)
+          start_time = time.time()
+          logger.info("Testing code execution by performing explain plan on SQL...")
+          sql_plan_test_result=test_sql_plan_execution(generated_sql) # Calling explain plan
+          logger.info('Dry-run complete')
+          bq_validation_duration = time.time() - start_time
 
-            if json_syntax_result['valid'] is True:   # LLM indicated the syntax is valid
+          logger.debug("BigQuery explain plan result:\n" + sql_plan_test_result)
 
-              logger.info("SQL query valid")
-              logger.info("Testing code execution by performing explain plan on SQL...")
+          if sql_plan_test_result == 'Execution Plan OK':  # Explain plan is OK
 
-              if INJECT_ONE_ERROR is True:
-                if retry_count < 1:
-                  logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
-                  generated_sql=generated_sql + ' ROWID'
+            logger.info("BigQuery explain plan successful")
 
-              sql_plan_test_result=test_sql_plan_execution(generated_sql) # Calling explain plan
+            generated_valid_sql = generated_sql
 
-              logger.debug("BigQuery explain plan result:\n" + sql_plan_test_result)
+            stop_loop = True
 
-              if sql_plan_test_result == 'Execution Plan OK':  # Explain plan is OK
-
-                logger.info("BigQuery explain plan successful")
-
-                stop_loop = True
-
-                if EXECUTE_FINAL_SQL is True:
-                  final_exec_result_df=execute_final_sql(generated_sql)
-                  logger.info('Question: ' + question)
-                  logger.info('Final SQL Execution Result:')
-                  logger.info(final_exec_result_df)
-                  if AUTO_ADD_KNOWNGOOD_SQL is True:  #### Adding to the Known Good SQL Vector DB
-                    if len(final_exec_result_df) >= 1:
-                      if not "ORA-" in str(final_exec_result_df.iloc[0,0]):
-                          logger.info('Adding Known Good SQL to Vector DB...')
-                          pgvector_handler.add_vector_sql_collection(schema, question, generated_sql, 'Y')
-                      else:
-                          ### Need to call retry
-                          stop_loop = False
-                          if chat_session is None: chat_session=init_chat()
-                          rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined , column_result_joined, str(final_exec_result_df.iloc[0,0]) ,similar_questions_return)
-                          logger.info('Rewritten SQL:\n' + rewrite_result)
-                          generated_sql=rewrite_result
-                          retry_count+=1
+            if EXECUTE_FINAL_SQL is True:
+              start_time = time.time()
+              logger.info('Executing SQL query...')
+              final_exec_result_df=execute_final_sql(generated_sql)
+              logger.info('SQL query complete')
+              bq_execution_duration = time.time() - start_time
+              logger.info('Question: ' + question)
+              logger.info('Final SQL Execution Result:\n' + str(final_exec_result_df))
+              sql_result = final_exec_result_df
+              if AUTO_ADD_KNOWNGOOD_SQL is True:  #### Adding to the Known Good SQL Vector DB
+                if len(final_exec_result_df) >= 1:
+                  if not "ORA-" in str(final_exec_result_df.iloc[0,0]):
+                      logger.info('Adding Known Good SQL to Vector DB...')
+                      start_time = time.time()
+                      pgvector_handler.add_vector_sql_collection(schema, question, generated_sql, question_text_embedding, 'Y')
+                      sql_added_to_vector_db_duration = time.time() - start_time
+                      logger.info('SQL added to Vector DB')
+                  else:
+                      ### Need to call retry
+                      stop_loop = False
+                      if chat_session is None: chat_session=init_chat()
+                      rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, str(final_exec_result_df.iloc[0,0]) ,similar_questions_return)
+                      logger.info('Rewritten SQL:\n' + rewrite_result)
+                      generated_sql=rewrite_result
+                      retry_count+=1
 
 
-                else:  # Do not execute final SQL
-                  logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False\n ")
+            else:  # Do not execute final SQL
+              logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False\n ")
 
-                appen_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'N', '', '')
+            appen_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'N', '', '')
 
-              else:  # Failure on explain plan execution
-                  logger.info("Error on explain plan execution")
-                  logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(retry_count))
-                  append_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', sql_plan_test_result )
-                  ### Need to call retry
-                  if chat_session is None: chat_session=init_chat()
-                  rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined , column_result_joined, sql_plan_test_result,similar_questions_return)
-                  logger.info('\n Rewritten SQL:\n' + rewrite_result)
-                  generated_sql=rewrite_result
-                  retry_count+=1
-
-            else:  # syntax validation returned False
-              logger.info('Syntax Error in generated SQL')
-              append_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'Y', 'syntax_validation', str(json_syntax_result['errors']))
-              ### Need to call retry
+          else:  # Failure on explain plan execution
+              logger.info("Error on explain plan execution")
               logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(retry_count))
+              append_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', sql_plan_test_result )
+              ### Need to call retry
               if chat_session is None: chat_session=init_chat()
-              rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined , column_result_joined, str(json_syntax_result['errors']) , similar_questions_return)
-              logger.info('Rewritten SQL:\n' + rewrite_result)
+              rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, sql_plan_test_result,similar_questions_return)
+              logger.info('\n Rewritten SQL:\n' + rewrite_result)
               generated_sql=rewrite_result
               retry_count+=1
 
-            if retry_count > retry_max_count:
-              stop_loop = True
+          if retry_count > retry_max_count:
+            stop_loop = True
 
         # After the while is completed
         if retry_count > retry_max_count:
@@ -897,8 +916,10 @@ def call_gen_sql(question):
   else:   ## Found the record on vector id
     #logger.info('\n Found Question in Vector. Returning the SQL')
     logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
+    generated_valid_sql = search_sql_vector_by_id_return
     if EXECUTE_FINAL_SQL is True:
         final_exec_result_df=execute_final_sql(search_sql_vector_by_id_return)
+        sql_result = final_exec_result_df
         logger.info('Question: ' + question)
         logger.info('Final SQL Execution Result:\n' + final_exec_result_df)
 
@@ -907,26 +928,38 @@ def call_gen_sql(question):
     logger.info('will call append to bq next')
     appen_2_bq_result=append_2_bq(model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
-  return "\n All Done!"
+  response = {
+    'generated_sql': sqlparse.format(generated_valid_sql, reindent=True, keyword_case='upper'),
+    'sql_result': str(sql_result),
+    'total_execution_time': round(time.time() - total_start_time, 3),
+    'embedding_generation_duration': round(embedding_duration, 3),
+    'similar_questions_duration': round(similar_questions_duration, 3),
+    'table_matching_duration': round(table_matching_duration, 3),
+    'sql_generation_duration': round(sql_generation_duration, 3),
+    'bq_validation_duration': round(bq_validation_duration, 3),
+    'bq_execution_duration': round(bq_execution_duration, 3),
+    'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3)
+  }
+
+  return response
 
 def execute_final_sql(generated_sql):
   df = pandas_gbq.read_gbq(generated_sql, project_id=PROJECT_ID)
   return df
 
-def answer_question(question):
-  start = time.time()
-  call_gen_result=call_gen_sql(question)
-  end = time.time()
-  logger.info(call_gen_result)
-  logger.info('Entire flow (including SQL execution) was executed in '+ str(end - start) + ' seconds') # time in seconds
+logger.info("-------------------------------------------------------------------------------")
+logger.info("-------------------------------------------------------------------------------")
 
-vertexai.init(project=PROJECT_ID, location="us-central1")
+#vertexai.init(project=PROJECT_ID, location="us-central1")
 model=createModel(PROJECT_ID, "us-central1",model_id)
 chat_model=createModel(PROJECT_ID, REGION,chat_model_id)
 
 # Run the SQL commands now.
 asyncio.run(pgvector_handler.init_pgvector_conn())  # type: ignore
 
+logger.info("Starting nl2sql module")
+
 init_table_and_columns_desc()
 
-answer_question("What is the brand with the most purchases in the last year?")
+response = call_gen_sql("What is the brand with the most purchases in the last year?")
+logger.info('Answer:\n' + json.dumps(response, indent=2))

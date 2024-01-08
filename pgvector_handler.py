@@ -42,7 +42,6 @@ ENABLE_ANALYTICS=True
 DATASET_NAME='nl2sql'
 DATASET_LOCATION='EU'
 LOG_TABLE_NAME='query_logs'
-FULL_LOG_TEXT=''
 
 # PGVECTOR (Cloud SQL Postgres) Info.
 database_password = "hr_tutorial"
@@ -60,7 +59,7 @@ ef_construction = 100
 operator =  "vector_cosine_ops"  # ["vector_cosine_ops", "vector_l2_ops", "vector_ip_ops"]
 
 # Palm Models to use
-embeddings_model='textembedding-gecko@001'
+embeddings_model='textembedding-gecko@003'
 
 def init_pgvector_handler(query: str, schema: str = 'userbase', group_concat_max_len: int = 102400):
 
@@ -157,10 +156,10 @@ def pgvector_table_desc_exists(df: DataFrame):
         table_results_joined = pgvector_get_data(table_sql)
 
         if len(table_results_joined) == 0:
-            logger.info("Table '", row['table_name'], "' not present in pgVector.")
+            logger.info("Table '" + str(row['table_name']) + "' not present in pgVector.")
             uninitialized_tables.append(row['table_name'])
         else:
-            logger.info("Table '" + row['table_name'] + "' already present in pgVector")
+            logger.info("Table '" + str(row['table_name']) + "' already present in pgVector")
         
     return uninitialized_tables
 
@@ -317,7 +316,6 @@ def get_tables_ann_pgvector(question: str, query: str, group_concat_max_len: int
 
 def search_sql_vector_by_id(schema, question, valid):
     from sqlalchemy.sql import text
-    global FULL_LOG_TEXT
     msg=''
 
     # Define ID ... hashed value of the question
@@ -360,12 +358,11 @@ def search_sql_vector_by_id(schema, question, valid):
         results = db_conn.execute(text(sql)).fetchall()
 
         if len(results) == 0:
-            FULL_LOG_TEXT= FULL_LOG_TEXT + '\n SQL Not Found in Vector DB. \n'
+            logger.error("SQL not found in Vector DB")
             msg='SQL Not Found in Vector DB'
 
         for r in results:
-            logger.info('\n Record found in Vector DB. Parameters: \n')
-            FULL_LOG_TEXT= FULL_LOG_TEXT + '\n Record found in Vector DB. Parameters: \n'
+            logger.info('Record found in Vector DB. Parameters:')
             #logger.info(r[0])
             msg=str(r[0])
 
@@ -379,14 +376,11 @@ def search_sql_vector_by_id(schema, question, valid):
 
 
 
-def search_sql_nearest_vector(schema, question, valid):
+def search_sql_nearest_vector(schema, question, question_text_embedding, valid):
     from sqlalchemy.sql import text
-
-    global FULL_LOG_TEXT
 
     msg='Examples:\n'
 
-    embedding_resp=text_embedding(question)
     matches = []
     #similarity_threshold = 0.1
     #num_matches = 3
@@ -415,9 +409,9 @@ def search_sql_nearest_vector(schema, question, valid):
     sql=f'''
         WITH vector_matches AS (
                               SELECT id, question, generated_sql, requestor, table_schema, table_catalog,
-                              1 - (embedding <=> \'{embedding_resp}\') AS similarity
+                              1 - (embedding <=> \'{question_text_embedding}\') AS similarity
                               FROM sql_embeddings
-                              WHERE 1 - (embedding <=> \'{embedding_resp}\') > {similarity_threshold}
+                              WHERE 1 - (embedding <=> \'{question_text_embedding}\') > {similarity_threshold}
                               ORDER BY similarity DESC
                               LIMIT {num_sql_matches}
                             )
@@ -434,8 +428,7 @@ def search_sql_nearest_vector(schema, question, valid):
 
         if len(results) == 0:
             msg=''
-            logger.info('\n No record near the query was found in the Vector DB. \n')
-            FULL_LOG_TEXT= FULL_LOG_TEXT + '\n No record near the query was found in the Vector DB. \n'
+            logger.info('No record near the query was found in the Vector DB.')
 
         for r in results:
             msg= msg + '\nQuestion:' + r[1] + '\n' + 'Generated SQL:' + r[2] + '\n'
@@ -484,18 +477,14 @@ def pgvector_handler(query: str, schema: str = 'userbase', group_concat_max_len:
 
 
 
-def add_vector_sql_collection(schema, question, final_sql, valid):
+def add_vector_sql_collection(schema, question, final_sql, question_text_embedding, valid):
   from datetime import datetime, timezone
   import hashlib
   import time
 
-  global FULL_LOG_TEXT
-
   epoch_time = datetime.now(timezone.utc)
 
   requestor=str(AUTH_USER)
-
-  embeddings=text_embedding(question)
 
   # Define ID ... hashed value of the question+requestor+schema
   q_value=str(PROJECT_ID) + '.' + str(source_type) + '.' + str(requestor) + '.' + str(schema) + '.' + str(question) + '.' + str(valid)
@@ -515,25 +504,22 @@ def add_vector_sql_collection(schema, question, final_sql, valid):
         \'{schema}\',
         \'{epoch_time}\',
         \'{source_type}\',
-        \'{embeddings}\')
+        \'{question_text_embedding}\')
         on conflict do nothing;
     '''
 
   ret=pgvector_handler(sql)
-  FULL_LOG_TEXT= FULL_LOG_TEXT + '\n Record added to Vector DB. Parameters: \n'
-  FULL_LOG_TEXT= FULL_LOG_TEXT + '\n' + str(question) + '\n'
 
   return 'Question ' + str(question) + ' added to the Vector DB'
 
 
 
-def get_tables_colums_vector(question):
+def get_tables_colums_vector(question, question_text_embedding):
     from sqlalchemy.sql import text
 
     table_results_joined=""
     column_results_joined=""
 
-    embedding_resp=text_embedding(question)
     matches = []
 
     # initialize Connector object
@@ -560,9 +546,9 @@ def get_tables_colums_vector(question):
         WITH vector_matches AS (
                               SELECT id, table_schema, table_name, table_catalog,
                               detailed_description, requestor,
-                              1 - (embedding <=> \'{embedding_resp}\') AS similarity
+                              1 - (embedding <=> \'{question_text_embedding}\') AS similarity
                               FROM table_embeddings
-                              WHERE 1 - (embedding <=> \'{embedding_resp}\') > {similarity_threshold}
+                              WHERE 1 - (embedding <=> \'{question_text_embedding}\') > {similarity_threshold}
                               ORDER BY similarity DESC
                               LIMIT {num_table_matches}
                             )
@@ -572,23 +558,6 @@ def get_tables_colums_vector(question):
                             and requestor=\'{AUTH_USER}\'
                             and table_catalog=\'{DATAPROJECT_ID}\'
                             '''
-    column_sql=f'''
-        WITH vector_matches AS (
-                              SELECT id, table_schema, table_name, column_name, table_catalog,
-                              detailed_description, requestor,
-                              1 - (embedding <=> \'{embedding_resp}\') AS similarity
-                              FROM column_embeddings
-                              WHERE 1 - (embedding <=> \'{embedding_resp}\') > {similarity_threshold}
-                              ORDER BY similarity DESC
-                              LIMIT {num_column_matches}
-                            )
-                            SELECT id, detailed_description, similarity
-                            FROM vector_matches
-                            where table_schema=\'{schema}\'
-                            and requestor=\'{AUTH_USER}\'
-                            and table_catalog=\'{DATAPROJECT_ID}\'
-                            '''
-
 
     with pool.connect() as db_conn:
 
@@ -596,15 +565,9 @@ def get_tables_colums_vector(question):
         for r in table_results:
             table_results_joined = table_results_joined + r[1] + '\n'
 
-
-        column_results = db_conn.execute(text(column_sql)).fetchall()
-        for r in column_results:
-            column_results_joined = column_results_joined + r[1] + '\n'
-
-
         db_conn.close()
 
-    return table_results_joined,column_results_joined
+    return table_results_joined
 
 
 # Configure pgVector extension if the same does not exist
