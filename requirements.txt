@@ -1,0 +1,15 @@
+google-cloud-firestore
+google-cloud-bigquery
+google-cloud-aiplatform
+shapely
+sqlalchemy
+asyncio
+pandas
+pandas_gbq
+pg8000
+gradio
+vertexai
+pgvector
+pgvector[asyncpg]
+cloud-sql-python-connector[pg8000]
+cloud-sql-python-connector[asyncpg]
