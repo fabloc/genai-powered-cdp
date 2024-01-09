@@ -18,79 +18,12 @@ import logging.config
 import yaml
 import sys
 import sqlparse
-
-# Load the config file
-with open('logging_config.yaml', 'rt') as f:
-    config = yaml.safe_load(f.read())
-
-# Configure the logging module with the config file
-logging.config.dictConfig(config)
-
-# create logger
-logger = logging.getLogger('nl2sql')
-
-# Override default uncaught exception handler to log all exceptions using the custom logger
-def handle_exception(exc_type, exc_value, exc_traceback):
-    if issubclass(exc_type, KeyboardInterrupt):
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        return
-
-    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
-
-sys.excepthook = handle_exception
-
-source_type='BigQuery'
-
-# @markdown Provide the below details to start using the notebook
-PROJECT_ID='cdp-demo-flocquet'
-REGION = 'europe-west1'
-DATAPROJECT_ID='cdp-demo-flocquet'
-AUTH_USER='admin@fabienlocquet.altostrat.com'
-# TABLES contain the tables to be used for SQL generation. Enter an empty table list when all tables in the
-# dataset should be used
-TABLES=['hll_user_aggregates', 'products_aggregates']
-
-# BQ Schema (DATASET) where tables leave
-schema='publisher_1_dataset' ### DDL extraction performed at this level, for the entire schema
-USER_DATASET= DATAPROJECT_ID + '.' + schema
-
-# Execution Parameters
-SQL_VALIDATION='ALL'
-INJECT_ONE_ERROR=False
-EXECUTE_FINAL_SQL=True
-SQL_MAX_FIX_RETRY=3
-AUTO_ADD_KNOWNGOOD_SQL=True
-
-# Analytics Warehouse
-ENABLE_ANALYTICS=False
-DATASET_NAME='nl2sql'
-DATASET_LOCATION='EU'
-LOG_TABLE_NAME='query_logs'
+import cfg
 
 
-# Palm Models to use
-model_id='gemini-pro'
-chat_model_id='codechat-bison-32k'
-
-# Initialize Palm Models to be used
-def createModel(PROJECT_ID, REGION, model_id):
-  from vertexai.preview.generative_models import GenerativeModel
-  from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel
-
-  if model_id == 'code-bison-32k':
-    model = CodeGenerationModel.from_pretrained('code-bison-32k')
-  elif model_id == 'gemini-pro':
-    model = GenerativeModel(model_id)
-  elif model_id == 'codechat-bison-32k':
-    model = CodeChatModel.from_pretrained("codechat-bison-32k")
-  elif model_id == 'chat-bison-32k':
-    model = ChatModel.from_pretrained("chat-bison-32k")
-  else:
-    raise ValueError
-  return model
 
 class UserSession:
-   
+  
   user_history = []
 
   def __init__(self, prompt_init):
@@ -123,22 +56,22 @@ class UserSession:
 # Define BigQuery Dictionary Queries and Helper Functions
 
 get_columns_sql='''
- SELECT
+SELECT
     columns.TABLE_CATALOG as project_id, columns.TABLE_SCHEMA as owner , columns.TABLE_NAME as table_name, columns_field_paths.FIELD_PATH as column_name,
     columns.IS_NULLABLE as is_nullable, columns_field_paths.DATA_TYPE as data_type, columns.COLUMN_DEFAULT as column_default, columns.ROUNDING_MODE as rounding_mode, DESCRIPTION as column_description
   FROM
-    {USER_DATASET}.INFORMATION_SCHEMA.COLUMNS AS columns
+    {cfg.user_dataset}.INFORMATION_SCHEMA.COLUMNS AS columns
   JOIN
-    {USER_DATASET}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS AS columns_field_paths
+    {cfg.user_dataset}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS AS columns_field_paths
   ON columns.TABLE_CATALOG = columns_field_paths.TABLE_CATALOG AND columns.TABLE_SCHEMA = columns_field_paths.TABLE_SCHEMA
     AND columns.TABLE_NAME = columns_field_paths.TABLE_NAME AND columns.COLUMN_NAME = columns_field_paths.COLUMN_NAME
   WHERE
     CASE
-        WHEN ARRAY_LENGTH({TABLES}) > 0 THEN columns.table_name IN UNNEST({TABLES})
+        WHEN ARRAY_LENGTH({cfg.tables}) > 0 THEN columns.table_name IN UNNEST({cfg.tables})
         ELSE TRUE
     END
   ORDER BY
-   project_id, owner, columns.table_name, columns.column_name ;
+  project_id, owner, columns.table_name, columns.column_name ;
 '''
 
 
@@ -147,13 +80,13 @@ SELECT T.CONSTRAINT_CATALOG, T.CONSTRAINT_SCHEMA, T.CONSTRAINT_NAME,
 T.TABLE_CATALOG as project_id, T.TABLE_SCHEMA as owner, T.TABLE_NAME as table_name, T.CONSTRAINT_TYPE,
 T.IS_DEFERRABLE, T.ENFORCED, K.COLUMN_NAME
 FROM
-{USER_DATASET}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS T
-JOIN {USER_DATASET}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE K
+{cfg.user_dataset}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS T
+JOIN {cfg.user_dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE K
 ON K.CONSTRAINT_NAME=T.CONSTRAINT_NAME
 WHERE
 T.CONSTRAINT_TYPE="FOREIGN KEY" AND 
 (CASE
-    WHEN ARRAY_LENGTH({TABLES}) > 0 THEN T.table_name IN UNNEST({TABLES})
+    WHEN ARRAY_LENGTH({cfg.tables}) > 0 THEN T.table_name IN UNNEST({cfg.tables})
     ELSE TRUE END)
 ORDER BY
 project_id, owner, table_name
@@ -164,13 +97,13 @@ SELECT T.CONSTRAINT_CATALOG, T.CONSTRAINT_SCHEMA, T.CONSTRAINT_NAME,
 T.TABLE_CATALOG as project_id, T.TABLE_SCHEMA as owner, T.TABLE_NAME as table_name, T.CONSTRAINT_TYPE,
 T.IS_DEFERRABLE, T.ENFORCED, K.COLUMN_NAME
 FROM
-    {USER_DATASET}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS T
-JOIN {USER_DATASET}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE K
+    {cfg.user_dataset}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS T
+JOIN {cfg.user_dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE K
 ON K.CONSTRAINT_NAME=T.CONSTRAINT_NAME
 WHERE
     T.CONSTRAINT_TYPE="PRIMARY KEY" AND
     (CASE
-        WHEN ARRAY_LENGTH({TABLES}) > 0 THEN T.table_name IN UNNEST({TABLES})
+        WHEN ARRAY_LENGTH({cfg.tables}) > 0 THEN T.table_name IN UNNEST({cfg.tables})
         ELSE TRUE END)
 ORDER BY
 project_id, owner, table_name
@@ -180,22 +113,38 @@ project_id, owner, table_name
 get_table_comments_sql='''
 select TABLE_CATALOG as project_id, TABLE_SCHEMA as owner, TABLE_NAME as table_name, OPTION_NAME, OPTION_TYPE, OPTION_VALUE as comments
 FROM
-    {USER_DATASET}.INFORMATION_SCHEMA.TABLE_OPTIONS
+    {cfg.user_dataset}.INFORMATION_SCHEMA.TABLE_OPTIONS
 WHERE
     OPTION_NAME = "description" AND
     (CASE
-        WHEN ARRAY_LENGTH({TABLES}) > 0 THEN table_name IN UNNEST({TABLES})
+        WHEN ARRAY_LENGTH({cfg.tables}) > 0 THEN table_name IN UNNEST({cfg.tables})
         ELSE TRUE END)
 ORDER BY
 project_id, owner, table_name
 '''
 
 
+# Initialize Palm Models to be used
+def createModel(PROJECT_ID, REGION, model_id):
+  from vertexai.preview.generative_models import GenerativeModel
+  from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel
+
+  if model_id == 'code-bison-32k':
+    model = CodeGenerationModel.from_pretrained('code-bison-32k')
+  elif model_id == 'gemini-pro':
+    model = GenerativeModel(model_id)
+  elif model_id == 'codechat-bison-32k':
+    model = CodeChatModel.from_pretrained("codechat-bison-32k")
+  elif model_id == 'chat-bison-32k':
+    model = ChatModel.from_pretrained("chat-bison-32k")
+  else:
+    raise ValueError
+  return model
 
 def schema_generator(sql):
   formatted_sql = sql.format(**globals(), **locals())
   logger.info("BigQuery request: " + formatted_sql)
-  df = pandas_gbq.read_gbq(formatted_sql, project_id=PROJECT_ID, location='europe-west1')
+  df = pandas_gbq.read_gbq(formatted_sql, project_id=cfg.project_id, location=cfg.region)
   return df
 
 
@@ -249,7 +198,7 @@ def get_column_sample(columns_df):
                 ))
     '''
     try:
-      column_samples_df=schema_generator(get_column_sample_sql)
+      column_samples_df = schema_generator(get_column_sample_sql)
       sample_column_list.append(column_samples_df['sample_values'].to_string(index=False))
     except Exception as err:
       column_name = str(row["column_name"])
@@ -287,13 +236,13 @@ def insert_sample_queries_lookup(tables_list):
       for sql_query in queries_samples[0]:
         question = sql_query['question']
         question_text_embedding = pgvector_handler.text_embedding(question)
-        pgvector_handler.add_vector_sql_collection(schema, sql_query['question'], sql_query['sql_query'], question_text_embedding, 'Y')
+        pgvector_handler.add_vector_sql_collection(cfg.schema, sql_query['question'], sql_query['sql_query'], question_text_embedding, 'Y')
   return queries_samples
 
 
 def init_table_and_columns_desc():
   
-    table_comments_df=schema_generator(get_table_comments_sql)
+    table_comments_df= schema_generator(get_table_comments_sql)
 
     # List all tables to be considered
     tables_list = get_tables(table_comments_df)
@@ -309,39 +258,39 @@ def init_table_and_columns_desc():
       # Store the table, column definition, primary/foreign keys and comments into Dataframes
       # Use Global variable TABLES, updated with uninitialized tables only. A better way needs to be implemented
       global TABLES
-      TABLES=uninitialized_tables
-      columns_df=schema_generator(get_columns_sql)
-      fkeys_df=schema_generator(get_fkeys_sql)
-      pkeys_df=schema_generator(get_pkeys_sql)
+      TABLES = uninitialized_tables
+      columns_df = schema_generator(get_columns_sql)
+      fkeys_df = schema_generator(get_fkeys_sql)
+      pkeys_df = schema_generator(get_pkeys_sql)
 
       # Adding column sample_values to the columns dataframe
-      columns_df=get_column_sample(columns_df)
+      columns_df = get_column_sample(columns_df)
 
       # Look at each tables dataframe row and use LLM to generate a table comment, but only for the tables with null comments (DB did not have comments on table)
       ## Using Palm to add table comments if comments are null
-      table_comments_df=add_table_comments(columns_df, pkeys_df, fkeys_df, table_comments_df)
+      table_comments_df = add_table_comments(columns_df, pkeys_df, fkeys_df, table_comments_df)
 
-      table_comments_df=build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df)
+      table_comments_df = build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df)
 
       # Dump the table description
       table_desc = serialized_detailed_description(table_comments_df)
 
-      file = open("table_desc.txt", "w")
-      file.write(table_desc)
-      file.close()
+      # file = open("table_desc.txt", "w")
+      # file.write(table_desc)
+      # file.close()
 
       pgvector_handler.add_table_desc_2_pgvector(table_comments_df)
 
       # Look at each column in the columns dataframe use LLM to generate a column comment, if one does not exist
-      columns_df=add_column_comments(columns_df, pkeys_df, fkeys_df, table_comments_df)
+      columns_df = add_column_comments(columns_df, pkeys_df, fkeys_df, table_comments_df)
 
-      columns_df=build_column_desc(columns_df)
+      columns_df = build_column_desc(columns_df)
 
       column_desc = serialized_detailed_description(columns_df)
 
-      file = open("column_desc.txt", "w")
-      file.write(column_desc)
-      file.close()
+      # file = open("column_desc.txt", "w")
+      # file.write(column_desc)
+      # file.close()
 
       pgvector_handler.add_column_desc_2_pgvector(columns_df)
 
@@ -354,8 +303,8 @@ def init_table_and_columns_desc():
 def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
   aug_table_comments_df = table_comments_df
 
-  #logger.info(len(aug_table_comments_df))
-  #logger.info(len(table_comments_df))
+  #self.logger.info(len(aug_table_comments_df))
+  #self.logger.info(len(table_comments_df))
 
   cur_table_name = ""
   cur_table_owner = ""
@@ -368,7 +317,7 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
     cur_table_owner = str(row_aug['owner'])
     cur_project_id = str(row_aug['project_id'])
     cur_full_table= cur_project_id + '.' + cur_table_owner + '.' + cur_table_name
-    #logger.info('\n' + cur_table_owner + '.' + cur_table_name + ':')
+    #self.logger.info('\n' + cur_table_owner + '.' + cur_table_name + ':')
 
     table_cols=[]
     table_cols_datatype=[]
@@ -416,8 +365,8 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
       Table Comments: {str(row_aug['comments'])}
     """
 
-    #logger.info ('Current aug dataset row: '  + str(row_aug['table_name']))
-    #logger.info(aug_table_desc)
+    #self.logger.info ('Current aug dataset row: '  + str(row_aug['table_name']))
+    #self.logger.info(aug_table_desc)
 
     # Works well
     aug_table_comments_df.at[index_aug, 'detailed_description'] = aug_table_desc
@@ -429,8 +378,8 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
 def build_column_desc(columns_df):
   aug_columns_df = columns_df
 
-  #logger.info(len(aug_columns_df))
-  #logger.info(len(columns_df))
+  #self.logger.info(len(aug_columns_df))
+  #self.logger.info(len(columns_df))
 
   cur_table_name = ""
   cur_table_owner = ""
@@ -443,7 +392,7 @@ def build_column_desc(columns_df):
     cur_full_table= cur_table_owner + '.' + cur_table_name
     curr_col_name = str(row_aug['column_name'])
 
-    #logger.info('\n' + cur_table_owner + '.' + cur_table_name + ':')
+    #self.logger.info('\n' + cur_table_owner + '.' + cur_table_name + ':')
 
     col_comments_text=f"""
         Column Name: {row_aug['column_name']} |
@@ -462,20 +411,6 @@ def build_column_desc(columns_df):
 
     aug_columns_df.at[index_aug, 'detailed_description'] = col_comments_text
   return aug_columns_df
-
-
-# Enable NL2SQL Analytics Warehouse
-if ENABLE_ANALYTICS is True:
-  # Create a BigQuery client
-  bq_client = bigquery.Client(location=DATASET_LOCATION, project=PROJECT_ID)
-
-  # Create a dataset
-  try:
-    dataset = bq_client.create_dataset(dataset=DATASET_NAME)
-  except Exception as e:
-    logger.error('Failed to create the dataset\n')
-    logger.error(str(e))
-
 
 def generate_sql(context_prompt):
   generated_sql_json = model.generate_content(
@@ -567,11 +502,10 @@ def test_sql_plan_execution(generated_sql):
   from google.cloud import bigquery
   try:
 
-    run_dataset=PROJECT_ID + '.' + DATASET_NAME
     df=pd.DataFrame()
 
     # Construct a BigQuery client object.
-    client = bigquery.Client(project=PROJECT_ID)
+    client = bigquery.Client(project=cfg.project_id)
 
     job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
 
@@ -661,21 +595,21 @@ def rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined,
 
   response = chat_send_message(chat_session, context_prompt)
 
-  #logger.info(str(response))
+  #self.logger.info(str(response))
   return clean_sql(response)
 
 
 #question="Display the result of selecting test word from dual"
 #final_sql='select \'test\' from dual'
 #ret=add_vector_sql_collection('HR', question, final_sql, 'Y')
-#logger.info( ret )
+#self.logger.info( ret )
 
 
 def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, failure_step, error_msg):
 
-  if ENABLE_ANALYTICS is True:
+  if cfg.enable_analytics is True:
       logger.debug('\nInside the Append to BQ block\n')
-      table_id=PROJECT_ID + '.' + DATASET_NAME + '.' + LOG_TABLE_NAME
+      table_id=cfg.project_id + '.' + cfg.dataset_name + '.' + cfg.log_table_name
       now = datetime.now()
 
       table_exists=False
@@ -697,10 +631,10 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
           ])
 
       new_row = {
-          "source_type":source_type,
-          "project_id":str(PROJECT_ID),
-          "user":str(AUTH_USER),
-          "schema": schema,
+          "source_type":cfg.source_type,
+          "project_id":str(cfg.project_id),
+          "user":str(cfg.auth_user),
+          "schema": cfg.schema,
           "model_used": model,
           "question": question,
           "generated_sql": generated_sql,
@@ -734,7 +668,7 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
 
       try:
         client.get_table(table_id)  # Make an API request.
-        #logger.info("Table {} already exists.".format(table_id))
+        #llogger.info("Table {} already exists.".format(table_id))
         table_exists=True
       except NotFound:
           logger.error("Table {} is not found.".format(table_id))
@@ -748,7 +682,7 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
           #else:
           #    print("Encountered errors while inserting rows: {}".format(errors))
       else:
-          pandas_gbq.to_gbq(df1, table_id, project_id=PROJECT_ID)  # replace to replace table; append to append to a table
+          pandas_gbq.to_gbq(df1, table_id, project_id=cfg.project_id)  # replace to replace table; append to append to a table
 
 
       # df1.loc[len(df1)] = new_row
@@ -801,13 +735,13 @@ def call_gen_sql(question):
         logger.info("Searching for similar questions in DB...")
         start_time = time.time()
         # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
-        similar_questions_return = pgvector_handler.search_sql_nearest_vector(schema, question, question_text_embedding, 'Y')
+        similar_questions_return = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
         similar_questions_duration = time.time() - start_time
         logger.info("Found similar questions:\n" + str(similar_questions_return))
 
         unrelated_question=False
         stop_loop = False
-        retry_max_count= SQL_MAX_FIX_RETRY
+        retry_max_count= cfg.sql_max_fix_retry
         retry_count=0
         chat_session=None
         logger.info("Now looking for appropriate tables in Vector to answer the question...")
@@ -820,7 +754,7 @@ def call_gen_sql(question):
             start_time = time.time()
             logger.info("Generating SQL query using LLM...")
             generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
-            
+            logger.info("SQL query generated:\n" + generated_sql)
             sql_generation_duration = time.time() - start_time
             if 'unrelated_answer' in generated_sql :
               stop_loop=True
@@ -835,7 +769,7 @@ def call_gen_sql(question):
 
         while (stop_loop is False):
 
-          if INJECT_ONE_ERROR is True:
+          if cfg.inject_one_error is True:
             if retry_count < 1:
               logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
               generated_sql=generated_sql + ' ROWID'
@@ -856,7 +790,7 @@ def call_gen_sql(question):
 
             stop_loop = True
 
-            if EXECUTE_FINAL_SQL is True:
+            if cfg.execute_final_sql is True:
               start_time = time.time()
               logger.info('Executing SQL query...')
               final_exec_result_df=execute_final_sql(generated_sql)
@@ -865,19 +799,19 @@ def call_gen_sql(question):
               logger.info('Question: ' + question)
               logger.info('Final SQL Execution Result:\n' + str(final_exec_result_df))
               sql_result = final_exec_result_df
-              if AUTO_ADD_KNOWNGOOD_SQL is True:  #### Adding to the Known Good SQL Vector DB
+              if cfg.auto_add_knowngood_sql is True:  #### Adding to the Known Good SQL Vector DB
                 if len(final_exec_result_df) >= 1:
                   if not "ORA-" in str(final_exec_result_df.iloc[0,0]):
                       logger.info('Adding Known Good SQL to Vector DB...')
                       start_time = time.time()
-                      pgvector_handler.add_vector_sql_collection(schema, question, generated_sql, question_text_embedding, 'Y')
+                      pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
                       sql_added_to_vector_db_duration = time.time() - start_time
                       logger.info('SQL added to Vector DB')
                   else:
                       ### Need to call retry
                       stop_loop = False
-                      if chat_session is None: chat_session=init_chat()
-                      rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, str(final_exec_result_df.iloc[0,0]) ,similar_questions_return)
+                      if chat_session is None: chat_session = init_chat()
+                      rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, str(final_exec_result_df.iloc[0,0]) ,similar_questions_return)
                       logger.info('Rewritten SQL:\n' + rewrite_result)
                       generated_sql=rewrite_result
                       retry_count+=1
@@ -886,15 +820,15 @@ def call_gen_sql(question):
             else:  # Do not execute final SQL
               logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False\n ")
 
-            appen_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'N', '', '')
+            appen_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'N', '', '')
 
           else:  # Failure on explain plan execution
               logger.info("Error on explain plan execution")
               logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(retry_count))
-              append_2_bq_result=append_2_bq(model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', sql_plan_test_result )
+              append_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', sql_plan_test_result )
               ### Need to call retry
-              if chat_session is None: chat_session=init_chat()
-              rewrite_result=rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, sql_plan_test_result,similar_questions_return)
+              if chat_session is None: chat_session = init_chat()
+              rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, sql_plan_test_result,similar_questions_return)
               logger.info('\n Rewritten SQL:\n' + rewrite_result)
               generated_sql=rewrite_result
               retry_count+=1
@@ -909,16 +843,18 @@ def call_gen_sql(question):
         # If query is unrelated to the dataset
         if unrelated_question is True:
           logger.info('Question cannot be answered using this dataset!')
-          append_2_bq_result=append_2_bq(model_id, question, 'Question cannot be answered using this dataset!', 'N', 'N', 'unrelated_question', '')
-
-          #logger.info(generated_sql)
+          append_2_bq_result = append_2_bq(
+            cfg.model_id,
+            question,
+            'Question cannot be answered using this dataset!',
+            'N', 'N', 'unrelated_question', '')
 
   else:   ## Found the record on vector id
     #logger.info('\n Found Question in Vector. Returning the SQL')
     logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
     generated_valid_sql = search_sql_vector_by_id_return
-    if EXECUTE_FINAL_SQL is True:
-        final_exec_result_df=execute_final_sql(search_sql_vector_by_id_return)
+    if cfg.execute_final_sql is True:
+        final_exec_result_df = execute_final_sql(search_sql_vector_by_id_return)
         sql_result = final_exec_result_df
         logger.info('Question: ' + question)
         logger.info('Final SQL Execution Result:\n' + final_exec_result_df)
@@ -926,7 +862,7 @@ def call_gen_sql(question):
     else:  # Do not execute final SQL
         logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False")
     logger.info('will call append to bq next')
-    appen_2_bq_result=append_2_bq(model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
+    appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
   response = {
     'generated_sql': sqlparse.format(generated_valid_sql, reindent=True, keyword_case='upper'),
@@ -944,22 +880,62 @@ def call_gen_sql(question):
   return response
 
 def execute_final_sql(generated_sql):
-  df = pandas_gbq.read_gbq(generated_sql, project_id=PROJECT_ID)
+  df = pandas_gbq.read_gbq(generated_sql, project_id=cfg.project_id)
   return df
 
-logger.info("-------------------------------------------------------------------------------")
-logger.info("-------------------------------------------------------------------------------")
+def main():
 
-#vertexai.init(project=PROJECT_ID, location="us-central1")
-model=createModel(PROJECT_ID, "us-central1",model_id)
-chat_model=createModel(PROJECT_ID, REGION,chat_model_id)
+  # Load the log config file
+  with open('logging_config.yaml', 'rt') as f:
+      config = yaml.safe_load(f.read())
 
-# Run the SQL commands now.
-asyncio.run(pgvector_handler.init_pgvector_conn())  # type: ignore
+  # Configure the logging module with the config file
+  logging.config.dictConfig(config)
 
-logger.info("Starting nl2sql module")
+  # create logger
+  global logger
+  logger = logging.getLogger('nl2sql')
 
-init_table_and_columns_desc()
+  # Override default uncaught exception handler to log all exceptions using the custom logger
+  def handle_exception(exc_type, exc_value, exc_traceback):
+      if issubclass(exc_type, KeyboardInterrupt):
+          sys.__excepthook__(exc_type, exc_value, exc_traceback)
+          return
 
-response = call_gen_sql("What is the brand with the most purchases in the last year?")
-logger.info('Answer:\n' + json.dumps(response, indent=2))
+      logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+  sys.excepthook = handle_exception
+
+  logger.info("-------------------------------------------------------------------------------")
+  logger.info("-------------------------------------------------------------------------------")
+
+  logger.info("Starting nl2sql module")
+
+  #vertexai.init(project=PROJECT_ID, location="us-central1")
+  global model
+  model = createModel(cfg.project_id, "us-central1", cfg.model_id)
+
+  global chat_model
+  chat_model = createModel(cfg.project_id, cfg.region, cfg.chat_model_id)
+
+  # Enable NL2SQL Analytics Warehouse
+  if cfg.enable_analytics is True:
+    # Create a BigQuery client
+    bq_client = bigquery.Client(location=cfg.dataset_location, project=cfg.project_id)
+
+    # Create a dataset
+    try:
+      dataset = bq_client.create_dataset(dataset=cfg.dataset_name)
+    except Exception as e:
+      logger.error('Failed to create the dataset\n')
+      logger.error(str(e))
+
+  pgvector_handler.init()
+
+  init_table_and_columns_desc()
+
+  response = call_gen_sql("Number of users who purchased products from the brand with the most purchases in the last year?")
+  logger.info('Answer:\n' + json.dumps(response, indent=2))
+
+if __name__ == "__main__":
+  main()
