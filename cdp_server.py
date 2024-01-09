@@ -1,22 +1,28 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google.cloud import firestore
-import txt2sql
-import json
 from google.cloud import bigquery
 from time import time
 from datetime import timedelta
 import sqlparse
+import nl2sql
+
 
 client = bigquery.Client()
 
+global app
 app = Flask(__name__)
 cors = CORS(app)
 
+global CURRENT_PROJECT_ID
 CURRENT_PROJECT_ID = "brands-cdp-demo"
 
 # Initialize Firestore client
+global db
 db = firestore.Client(CURRENT_PROJECT_ID)
+
+def init():
+    app.run(host="0.0.0.0", port=8080)
 
 def serialize_sets(obj):
     if isinstance(obj, set):
@@ -89,27 +95,9 @@ def query_segments(publisher_name):
     print("Incoming query: ", query)
 
     start_time = time()
-    sql_query = txt2sql.generate_sql_query(query)
-    # Format SQL query
-    sql_query = sqlparse.format(sql_query, reindent=True, keyword_case='upper')
+    generated_query = nl2sql.call_gen_sql(query)
 
-    query_generation_time = str(round(time() - start_time, 3)) + 's'
-
-    print("Translated SQL query: ", sql_query)
-
-    try:
-        start_time = time()
-        query_job = client.query(sql_query)  # API request
-        sql_query_time = str(round(time() - start_time, 3)) + 's'
-        rows = query_job.result()  # Waits for query to finish
-
-        for row in rows:
-            query_result = row.f0_
-    except Exception as err:
-        print("Error while performing the BigQuery request: ", err)
-        query_result = 'Error in BigQuery request'
-
-    return {'sql_query': sql_query, 'query_generation_time': query_generation_time,'audience_size': query_result, 'sql_query_time': sql_query_time}, 200, {'Content-Type': 'application/json'}
+    return generated_query
 
 @app.route("/brands", methods=["GET"])
 def get_brands():
@@ -197,8 +185,3 @@ def delete_brand(publisher_name, brand_name):
     doc_ref = db.collection("publishers").document(publisher_name)
     doc_ref = doc_ref.collection("mappings").document(brand_name)
     doc_ref.delete()
-
-if __name__ == "__main__":
-
-    # Run Flask server
-    app.run(host="0.0.0.0", port=8080, debug=True)

@@ -1,25 +1,15 @@
 # Common Imports
-import time
 from datetime import datetime
-import vertexai
 import pandas_gbq
 from sqlalchemy import create_engine
 from sqlalchemy import text
 import pandas as pd
-import json
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from logging import exception
-import asyncio
 import pgvector_handler
-import os
-import logging
-import logging.config
-import yaml
-import sys
-import sqlparse
+import os, sqlparse, logging, json, time
 import cfg
-
 
 
 class UserSession:
@@ -123,6 +113,33 @@ ORDER BY
 project_id, owner, table_name
 '''
 
+def init():
+
+  global logger
+  logger = logging.getLogger('nl2sql')
+
+  logger.info("Starting nl2sql module")
+
+  #vertexai.init(project=PROJECT_ID, location="us-central1")
+  global model
+  model = createModel(cfg.project_id, "us-central1", cfg.model_id)
+
+  global chat_model
+  chat_model = createModel(cfg.project_id, cfg.region, cfg.chat_model_id)
+
+  # Enable NL2SQL Analytics Warehouse
+  if cfg.enable_analytics is True:
+      # Create a BigQuery client
+      bq_client = bigquery.Client(location=cfg.dataset_location, project=cfg.project_id)
+
+      # Create a dataset
+      try:
+        dataset = bq_client.create_dataset(dataset=cfg.dataset_name)
+      except Exception as e:
+        logger.error('Failed to create the dataset\n')
+        logger.error(str(e))
+
+  init_table_and_columns_desc()
 
 # Initialize Palm Models to be used
 def createModel(PROJECT_ID, REGION, model_id):
@@ -865,7 +882,7 @@ def call_gen_sql(question):
     appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
   response = {
-    'generated_sql': sqlparse.format(generated_valid_sql, reindent=True, keyword_case='upper'),
+    'generated_sql': str(generated_valid_sql),
     'sql_result': str(sql_result),
     'total_execution_time': round(time.time() - total_start_time, 3),
     'embedding_generation_duration': round(embedding_duration, 3),
@@ -882,60 +899,3 @@ def call_gen_sql(question):
 def execute_final_sql(generated_sql):
   df = pandas_gbq.read_gbq(generated_sql, project_id=cfg.project_id)
   return df
-
-def main():
-
-  # Load the log config file
-  with open('logging_config.yaml', 'rt') as f:
-      config = yaml.safe_load(f.read())
-
-  # Configure the logging module with the config file
-  logging.config.dictConfig(config)
-
-  # create logger
-  global logger
-  logger = logging.getLogger('nl2sql')
-
-  # Override default uncaught exception handler to log all exceptions using the custom logger
-  def handle_exception(exc_type, exc_value, exc_traceback):
-      if issubclass(exc_type, KeyboardInterrupt):
-          sys.__excepthook__(exc_type, exc_value, exc_traceback)
-          return
-
-      logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
-
-  sys.excepthook = handle_exception
-
-  logger.info("-------------------------------------------------------------------------------")
-  logger.info("-------------------------------------------------------------------------------")
-
-  logger.info("Starting nl2sql module")
-
-  #vertexai.init(project=PROJECT_ID, location="us-central1")
-  global model
-  model = createModel(cfg.project_id, "us-central1", cfg.model_id)
-
-  global chat_model
-  chat_model = createModel(cfg.project_id, cfg.region, cfg.chat_model_id)
-
-  # Enable NL2SQL Analytics Warehouse
-  if cfg.enable_analytics is True:
-    # Create a BigQuery client
-    bq_client = bigquery.Client(location=cfg.dataset_location, project=cfg.project_id)
-
-    # Create a dataset
-    try:
-      dataset = bq_client.create_dataset(dataset=cfg.dataset_name)
-    except Exception as e:
-      logger.error('Failed to create the dataset\n')
-      logger.error(str(e))
-
-  pgvector_handler.init()
-
-  init_table_and_columns_desc()
-
-  response = call_gen_sql("Number of users who purchased products from the brand with the most purchases in the last year?")
-  logger.info('Answer:\n' + json.dumps(response, indent=2))
-
-if __name__ == "__main__":
-  main()
