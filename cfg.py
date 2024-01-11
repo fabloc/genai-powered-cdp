@@ -26,7 +26,6 @@ user_dataset = tables_config['user_dataset']
 # Execution variables
 sql_validation = execution_config['sql_validation']
 inject_one_error = execution_config.getboolean('inject_one_error')
-execute_final_sql = execution_config.getboolean('execute_final_sql')
 sql_max_fix_retry = execution_config.getint('sql_max_fix_retry')
 auto_add_knowngood_sql = execution_config.getboolean('auto_add_knowngood_sql')
 

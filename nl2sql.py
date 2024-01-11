@@ -8,7 +8,7 @@ from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from logging import exception
 import pgvector_handler
-import os, sqlparse, logging, json, time, html
+import os, logging, json, time, re
 import cfg
 
 
@@ -42,6 +42,17 @@ class UserSession:
   
   def reset_history(self):
     self.history = []
+
+class BigQueryError(Exception):
+  # Constructor or Initializer
+  def __init__(self, type, code, message):
+      self.type = type
+      self.code = code
+      self.message = message
+
+  # __str__ is to print() the value
+  def __str__(self):
+      return("BigQuery Error with type: " + self.type + ", code: " + self.code + ", and message: " + self.message)
 
 # Define BigQuery Dictionary Queries and Helper Functions
 
@@ -390,6 +401,7 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
     aug_table_comments_df.at[index_aug, 'detailed_description'] = aug_table_desc
   return aug_table_comments_df
 
+
 # Build a custom "detailed_description" in the columns dataframe. This will be indexed by the Vector DB
 # Augment columns dataframe with detailed description. This detailed description column will be the one used as the document when adding the record to the VectorDB
 
@@ -430,6 +442,7 @@ def build_column_desc(columns_df):
     aug_columns_df.at[index_aug, 'detailed_description'] = col_comments_text
   return aug_columns_df
 
+
 def generate_sql(context_prompt):
   generated_sql_json = model.generate_content(
     context_prompt,
@@ -441,19 +454,22 @@ def generate_sql(context_prompt):
   generated_sql = generated_sql_json.candidates[0].content.parts[0].text
   return generated_sql
 
+
 def chat_send_message(chat_session, context_prompt):
   generated_text = chat_session.send_message(context_prompt)
-  logger.info("Generated text: " + generated_text)
-  return generated_text.text
+  logger.info("Generated text: " + generated_text.candidates[0].text)
+  return generated_text.candidates[0].text
 
 
 def clean_sql(result):
   result = result.replace("```sql", "").replace("```", "")
   return result
 
+
 def clean_json(result):
   result = result.replace("```json", "").replace("```", "")
   return result
+
 
 def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
@@ -609,7 +625,7 @@ def rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined,
   #Column Descriptions:
   #{column_result_joined}
 
-  logger.info("SQL rewriting prompt:\n", context_prompt, "\n'")
+  logger.info("SQL rewritten prompt:\n" + context_prompt)
 
   response = chat_send_message(chat_session, context_prompt)
 
@@ -717,7 +733,7 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
 def call_gen_sql(question):
 
   total_start_time = time.time()
-  generated_valid_sql = ''
+  generated_sql = ''
   sql_result = ''
   matched_tables = []
 
@@ -734,9 +750,6 @@ def call_gen_sql(question):
   embedding_duration = time.time() - start_time
   logger.info("Text embedding created")
 
-  # Overwriting for testing purposes
-  #INJECT_ONE_ERROR = True
-
   logger.info("User questions: " + str(question))
 
   # Will look into the Vector DB first and see if there is a hash match.
@@ -748,173 +761,238 @@ def call_gen_sql(question):
 
   # search_sql_vector_by_id_return = "SQL Not Found in Vector DB"
 
-  if search_sql_vector_by_id_return == 'SQL Not Found in Vector DB':   ### Only go thru the loop if hash of the question is not found in Vector.
+  try:
 
-        logger.info("Did not find same question in DB")
-        logger.info("Searching for similar questions in DB...")
-        start_time = time.time()
-        # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
-        similar_questions_return = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
-        similar_questions_duration = time.time() - start_time
-        logger.info("Found similar questions:\n" + str(similar_questions_return))
+    if search_sql_vector_by_id_return == 'SQL Not Found in Vector DB':   ### Only go thru the loop if hash of the question is not found in Vector.
 
-        unrelated_question=False
-        stop_loop = False
-        retry_max_count= cfg.sql_max_fix_retry
-        retry_count=0
-        chat_session=None
-        logger.info("Now looking for appropriate tables in Vector to answer the question...")
-        start_time = time.time()
-        table_result_joined = pgvector_handler.get_tables_colums_vector(question, question_text_embedding)
-        table_matching_duration = time.time() - start_time
+      logger.info("Did not find same question in DB")
+      logger.info("Searching for similar questions in DB...")
+      start_time = time.time()
+      # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
+      similar_questions_return = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
+      similar_questions_duration = time.time() - start_time
+      logger.info("Found similar questions:\n" + str(similar_questions_return))
 
-        if len(table_result_joined) > 0 :
-            logger.info("Found matching tables")
+      unrelated_question=False
+      stop_loop = False
+      retry_max_count= cfg.sql_max_fix_retry
+      retry_count=0
+      chat_session=None
+      logger.info("Now looking for appropriate tables in Vector to answer the question...")
+      start_time = time.time()
+      table_result_joined = pgvector_handler.get_tables_colums_vector(question, question_text_embedding)
+      table_matching_duration = time.time() - start_time
 
-            # Add matched table to list of tables used during the SQL generation
-            for table in cfg.tables:
-              if table in table_result_joined:
-                matched_tables.append(table)
+      if len(table_result_joined) > 0 :
+          logger.info("Found matching tables")
 
-            start_time = time.time()
-            logger.info("Generating SQL query using LLM...")
-            generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
-            logger.info("SQL query generated:\n" + generated_sql)
-            sql_generation_duration = time.time() - start_time
-            if 'unrelated_answer' in generated_sql :
-              stop_loop=True
-              #logger.info('Inside if statement to check for unrelated question...')
-              unrelated_question=True
-        else:
+          # Add matched table to list of tables used during the SQL generation
+          for table in cfg.tables:
+            if table in table_result_joined:
+              matched_tables.append(table)
+
+          start_time = time.time()
+          logger.info("Generating SQL query using LLM...")
+          generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
+          logger.info("SQL query generated:\n" + generated_sql)
+          sql_generation_duration = time.time() - start_time
+          if 'unrelated_answer' in generated_sql :
             stop_loop=True
+            #logger.info('Inside if statement to check for unrelated question...')
             unrelated_question=True
-            logger.info('No ANN/appropriate tables found in Vector to answer the question. Stopping...')
-
-
-
-        while (stop_loop is False):
-
           if cfg.inject_one_error is True:
             if retry_count < 1:
               logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
               generated_sql=generated_sql + ' ROWID'
+      else:
+          stop_loop=True
+          unrelated_question=True
+          logger.info('No ANN/appropriate tables found in Vector to answer the question. Stopping...')
 
-          start_time = time.time()
-          logger.info("Testing code execution by performing explain plan on SQL...")
-          sql_plan_test_result=test_sql_plan_execution(generated_sql) # Calling explain plan
-          logger.info('Dry-run complete')
-          bq_validation_duration = time.time() - start_time
+      while (stop_loop is False):
 
-          logger.debug("BigQuery explain plan result:\n" + sql_plan_test_result)
+        start_time = time.time()
+        logger.info('Executing SQL query...')
+        bq_query_execution_status = 'Success'
 
-          if sql_plan_test_result == 'Execution Plan OK':  # Explain plan is OK
+        try:
+          sql_result_df=execute_sql(generated_sql)
+          bq_query_execution_status = 'Success'
+        except BigQueryError as error:
+          if error.type == 'Bad SQL query':
+            logger.error("BigQuery query execution failed with error code: " + str(error.code) + " and error message: " + error.message)
+            bq_query_execution_status = error.message
+          elif error.type == 'Permission Error':
+            logger.error("Permission error while trying to access BigQuery Table with error code: " + str(error.code) + " and error message: " + error.message)
+            raise Exception(err)
+          else:
+            raise Exception(err)
+        except Exception as error:
+          print(error)
+        bq_execution_duration = time.time() - start_time
 
-            logger.info("BigQuery explain plan successful")
+        logger.info('SQL query complete')
+        bq_execution_duration = time.time() - start_time
 
-            generated_valid_sql = generated_sql
+        if bq_query_execution_status == 'Success':
+          stop_loop = True
 
-            stop_loop = True
+          logger.info('Question: ' + question)
+          logger.info('SQL Execution Result:\n' + str(sql_result_df))
 
-            if cfg.execute_final_sql is True:
-              start_time = time.time()
-              logger.info('Executing SQL query...')
-              final_exec_result_df=execute_final_sql(generated_sql)
-              logger.info('SQL query complete')
-              bq_execution_duration = time.time() - start_time
-              logger.info('Question: ' + question)
-              logger.info('Final SQL Execution Result:\n' + str(final_exec_result_df))
-              sql_result = final_exec_result_df
-              if cfg.auto_add_knowngood_sql is True:  #### Adding to the Known Good SQL Vector DB
-                if len(final_exec_result_df) >= 1:
-                  if not "ORA-" in str(final_exec_result_df.iloc[0,0]):
-                      logger.info('Adding Known Good SQL to Vector DB...')
-                      start_time = time.time()
-                      pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
-                      sql_added_to_vector_db_duration = time.time() - start_time
-                      logger.info('SQL added to Vector DB')
-                  else:
-                      ### Need to call retry
-                      stop_loop = False
-                      if chat_session is None: chat_session = init_chat()
-                      rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, str(final_exec_result_df.iloc[0,0]) ,similar_questions_return)
-                      logger.info('Rewritten SQL:\n' + rewrite_result)
-                      generated_sql=rewrite_result
-                      retry_count+=1
+          if cfg.auto_add_knowngood_sql is True:  #### Adding to the Known Good SQL Vector DB
+            if len(sql_result_df) >= 1:
+              if not "ORA-" in str(sql_result_df.iloc[0,0]):
+                  logger.info('Adding Known Good SQL to Vector DB...')
+                  start_time = time.time()
+                  pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
+                  sql_added_to_vector_db_duration = time.time() - start_time
+                  logger.info('SQL added to Vector DB')
+              else:
+                  ### Need to call retry
+                  stop_loop = False
+                  if chat_session is None: chat_session = init_chat()
+                  rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, str(sql_result_df.iloc[0,0]) ,similar_questions_return)
+                  generated_sql=rewrite_result
+                  retry_count+=1
 
+          appen_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'N', '', '')
 
-            else:  # Do not execute final SQL
-              logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False\n ")
+        else:  # Failure on BigQuery SQL execution
+            logger.info("Error during SQL execution")
+            logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(retry_count))
+            append_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', bq_query_execution_status )
+            ### Need to call retry
+            if chat_session is None: chat_session = init_chat()
+            rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, bq_query_execution_status, similar_questions_return)
+            logger.info('\n Rewritten SQL:\n' + rewrite_result)
+            generated_sql=rewrite_result
+            retry_count+=1
 
-            appen_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'N', '', '')
-
-          else:  # Failure on explain plan execution
-              logger.info("Error on explain plan execution")
-              logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(retry_count))
-              append_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', sql_plan_test_result )
-              ### Need to call retry
-              if chat_session is None: chat_session = init_chat()
-              rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, sql_plan_test_result,similar_questions_return)
-              logger.info('\n Rewritten SQL:\n' + rewrite_result)
-              generated_sql=rewrite_result
-              retry_count+=1
-
-          if retry_count > retry_max_count:
-            stop_loop = True
-
-        # After the while is completed
         if retry_count > retry_max_count:
-          logger.info('Oopss!!! Could not find a good SQL. This is the best I came up with !!!!!\n' + generated_sql)
+          stop_loop = True
 
-        # If query is unrelated to the dataset
-        if unrelated_question is True:
-          logger.info('Question cannot be answered using this dataset!')
-          append_2_bq_result = append_2_bq(
-            cfg.model_id,
-            question,
-            'Question cannot be answered using this dataset!',
-            'N', 'N', 'unrelated_question', '')
+      # After the while is completed
+      if retry_count > retry_max_count:
+        logger.info('Oopss!!! Could not find a good SQL. This is the best I came up with !!!!!\n' + generated_sql)
 
-  else:
-    # Found the record on vector id
-    # logger.info('\n Found Question in Vector. Returning the SQL')
-    logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
-    generated_valid_sql = search_sql_vector_by_id_return
-    if cfg.execute_final_sql is True:
-        final_exec_result_df = execute_final_sql(search_sql_vector_by_id_return)
-        sql_result = final_exec_result_df
-        logger.info('Question: ' + question)
-        logger.info('Final SQL Execution Result:\n' + final_exec_result_df)
+      # If query is unrelated to the dataset
+      if unrelated_question is True:
+        logger.info('Question cannot be answered using this dataset!')
+        append_2_bq_result = append_2_bq(
+          cfg.model_id,
+          question,
+          'Question cannot be answered using this dataset!',
+          'N', 'N', 'unrelated_question', '')
 
-    else:  # Do not execute final SQL
-        logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False")
-    logger.info('will call append to bq next')
-    appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
+    else:
+      # Found the record on vector id
+      # logger.info('\n Found Question in Vector. Returning the SQL')
+      logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
+      generated_sql = search_sql_vector_by_id_return
+      if cfg.execute_final_sql is True:
+          final_exec_result_df = execute_sql(search_sql_vector_by_id_return)
+          sql_result_df = final_exec_result_df
+          logger.info('Question: ' + question)
+          logger.info('Final SQL Execution Result:\n' + final_exec_result_df)
 
-  if 'hll_user_aggregates' in matched_tables:
-    sql_result_str = "Audience Size: " + str(sql_result.iat[0,0].item())
-    is_audience_result = True
-  else:
-    sql_result_str = sql_result.to_html()
-    is_audience_result = True
+      else:  # Do not execute final SQL
+          logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False")
+      logger.info('will call append to bq next')
+      appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
-  response = {
-    'generated_sql': '<pre>' + generated_valid_sql + '</pre>',
-    'sql_result': sql_result_str,
-    'is_audience_result': str(is_audience_result),
-    'total_execution_time': round(time.time() - total_start_time, 3),
-    'embedding_generation_duration': round(embedding_duration, 3),
-    'similar_questions_duration': round(similar_questions_duration, 3),
-    'table_matching_duration': round(table_matching_duration, 3),
-    'sql_generation_duration': round(sql_generation_duration, 3),
-    'bq_validation_duration': round(bq_validation_duration, 3),
-    'bq_execution_duration': round(bq_execution_duration, 3),
-    'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3)
-  }
+    if 'hll_user_aggregates' in matched_tables:
+      sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
+      is_audience_result = True
+    else:
+      sql_result_str = sql_result.to_html()
+      is_audience_result = True
 
-  logger.info("Generated object: \n" + str(response))
+    response = {
+      'status': 'success',
+      'generated_sql': '<pre>' + generated_sql + '</pre>',
+      'sql_result': sql_result_str,
+      'is_audience_result': str(is_audience_result),
+      'total_execution_time': round(time.time() - total_start_time, 3),
+      'embedding_generation_duration': round(embedding_duration, 3),
+      'similar_questions_duration': round(similar_questions_duration, 3),
+      'table_matching_duration': round(table_matching_duration, 3),
+      'sql_generation_duration': round(sql_generation_duration, 3),
+      'bq_execution_duration': round(bq_execution_duration, 3),
+      'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3)
+    }
 
-  return response
+    logger.info("Generated object: \n" + str(response))
 
-def execute_final_sql(generated_sql):
-  df = pandas_gbq.read_gbq(generated_sql, project_id=cfg.project_id)
-  return df
+    return response
+  
+  except BigQueryError as err:
+    response = {
+      'status': 'error',
+      'type': err.type,
+      'error_message': err.message
+    }
+
+    return response
+  except Exception as err:
+    print("Exception raised: " + str(err.args))
+
+
+def execute_sql(generated_sql):
+  """Executes the given SQL query using the pandas_gbq library.
+
+  Args:
+    generated_sql: The SQL query to execute.
+
+  Returns:
+    A pandas DataFrame containing the results of the query.
+  """
+
+  # Set the initial backoff time to 1 second.
+  backoff_time = 1
+
+  # Set the maximum number of retries to 5.
+  max_retries = 5
+
+  # Create a counter to track the number of retries.
+  retry_count = 0
+
+  while retry_count < max_retries:
+    try:
+      # Execute the SQL query.
+      df = pandas_gbq.read_gbq(generated_sql, project_id=cfg.project_id)
+
+      # If the query is successful, return the results.
+      return df
+
+    except Exception as err:
+      
+      # If the query fails, check the error code.
+      error_code_pattern = re.compile('Reason: (\d+)')
+      error_message_raw = err.args[0]
+      match = error_code_pattern.findall(error_message_raw)
+
+      error_code = int(match[0])
+      error_message = error_message_raw.split('\n\nLocation')[0]
+
+      # If the error code is 500 or 503, retry the query.
+      if error_code == 500 or error_code == 503:
+        # Increase the backoff time.
+        backoff_time *= 2
+
+        # Sleep for the backoff time.
+        time.sleep(backoff_time)
+
+        # Increment the retry count.
+        retry_count += 1
+
+      # If the error code is not 500 or 503, raise the exception.
+      elif error_code == 403 or error_code == 409:
+        raise BigQueryError(type='Permission Error', code=error_code, message=error_message)
+      elif error_code == 400 or error_code == 404:
+        raise BigQueryError(type='Bad SQL query', code=error_code, message=error_message)
+      else:
+        raise BigQueryError(type='Undefined BigQuery Error', code=error_code, message=error_message_raw)
+
+  # If the maximum number of retries has been reached, raise an exception.
+  raise BigQueryError(type='BigQuery Internal Error', code='500',message='Maximum number of retries reached.')
