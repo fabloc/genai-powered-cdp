@@ -1,4 +1,4 @@
-import configparser
+import configparser, json
 from configparser import ExtendedInterpolation
 
 config = configparser.ConfigParser(interpolation=ExtendedInterpolation())
@@ -19,6 +19,7 @@ auth_user = gcp_config['auth_user']
 # Tables variables
 source_type = tables_config['source_type']
 tables = tables_config['tables']
+tables = json.loads(tables)
 schema = tables_config['schema']
 user_dataset = tables_config['user_dataset']
 
@@ -41,6 +42,7 @@ chat_model_id = models_config['chat_model_id']
 embeddings_model = models_config['embeddings_model']
 
 # Vector DB variables
+update_db_at_startup = vector_config.getboolean('update_db_at_startup')
 database_password = vector_config['database_password']
 instance_name = vector_config['instance_name']
 database_name = vector_config['database_name']

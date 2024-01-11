@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>BigQuery Request Generation Tool</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+
+        <div class="container">
+            <header>
+                <h1>Audience Builder</h1>
+            </header>
+            <main>
+                <div class="search-bar">
+                    <input id="query" type="text" placeholder="Type request in natural language...">
+                    <button id="submit-query">GO!</button>
+                </div>
+                <div class="sql-generation-container">
+                    <p class="result-header">Generated SQL Query</p>
+                    <div id="sql-query-result" class="pest-area"></div>
+                </div>
+                <div class="audience-container">
+                    <p class="result-header">Matching Audience</p>
+                    <div id="audience-result" class="audience-area"></div>
+                </div>
+                <div class="metrics-centered">
+                    <div class="aligned-boxes">
+                        <p class="generation-time-header">Query Generation Time</p>
+                        <div id="query-generation-time" class="time-area"></div>
+                    </div>
+                    <div class="aligned-boxes">
+                        <p class="generation-time-header">Query Execution Time</p>
+                        <div id="sql-query-time" class="time-area"></div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <script>
+            queryEl = document.getElementById('query');
+            resultEl = document.getElementById('sql-query-result');
+            audienceEl = document.getElementById('audience-result');
+            generationDurationEl = document.getElementById('query-generation-time');
+            queryDurationEl = document.getElementById('sql-query-time');
+
+            btn = document.getElementById('submit-query');
+            btn.addEventListener('click', function () {
+                fetch('http://127.0.0.1:8080//publishers/publisher_1/segments/query?q=' + queryEl.value)
+                    .then((response) => { 
+                        return response.json().then((data) => {
+                            console.log(data);
+                            resultEl.innerHTML = data['generated_sql'].replaceAll('\n', '&#10;')
+                            audienceEl.innerHTML = data['sql_result']
+                            generationDurationEl.innerHTML = data['sql_generation_duration']
+                            queryDurationEl.innerHTML = data['bq_execution_duration']
+                            return data;
+                        }).catch((err) => {
+                            console.log(err);
+                        }) 
+                    });
+            });
+        </script>
+
+    </body>
+</html>

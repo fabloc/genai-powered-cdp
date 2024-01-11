@@ -8,7 +8,7 @@ from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from logging import exception
 import pgvector_handler
-import os, sqlparse, logging, json, time
+import os, sqlparse, logging, json, time, html
 import cfg
 
 
@@ -139,7 +139,8 @@ def init():
         logger.error('Failed to create the dataset\n')
         logger.error(str(e))
 
-  init_table_and_columns_desc()
+  if cfg.update_db_at_startup is True:
+    init_table_and_columns_desc()
 
 # Initialize Palm Models to be used
 def createModel(PROJECT_ID, REGION, model_id):
@@ -312,7 +313,7 @@ def init_table_and_columns_desc():
       pgvector_handler.add_column_desc_2_pgvector(columns_df)
 
     # Look for files listing sample queries to be ingested in the pgVector DB
-    insert_sample_queries_lookup(tables_list)
+    #insert_sample_queries_lookup(tables_list)
 
 
 # Build a custom "detailed_description" table column to be indexed by the Vector DB
@@ -718,6 +719,7 @@ def call_gen_sql(question):
   total_start_time = time.time()
   generated_valid_sql = ''
   sql_result = ''
+  matched_tables = []
 
   embedding_duration = ''
   similar_questions_duration = ''
@@ -768,6 +770,12 @@ def call_gen_sql(question):
 
         if len(table_result_joined) > 0 :
             logger.info("Found matching tables")
+
+            # Add matched table to list of tables used during the SQL generation
+            for table in cfg.tables:
+              if table in table_result_joined:
+                matched_tables.append(table)
+
             start_time = time.time()
             logger.info("Generating SQL query using LLM...")
             generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
@@ -866,8 +874,9 @@ def call_gen_sql(question):
             'Question cannot be answered using this dataset!',
             'N', 'N', 'unrelated_question', '')
 
-  else:   ## Found the record on vector id
-    #logger.info('\n Found Question in Vector. Returning the SQL')
+  else:
+    # Found the record on vector id
+    # logger.info('\n Found Question in Vector. Returning the SQL')
     logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
     generated_valid_sql = search_sql_vector_by_id_return
     if cfg.execute_final_sql is True:
@@ -881,9 +890,17 @@ def call_gen_sql(question):
     logger.info('will call append to bq next')
     appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
+  if 'hll_user_aggregates' in matched_tables:
+    sql_result_str = "Audience Size: " + str(sql_result.iat[0,0].item())
+    is_audience_result = True
+  else:
+    sql_result_str = sql_result.to_html()
+    is_audience_result = True
+
   response = {
-    'generated_sql': str(generated_valid_sql),
-    'sql_result': str(sql_result),
+    'generated_sql': '<pre>' + generated_valid_sql + '</pre>',
+    'sql_result': sql_result_str,
+    'is_audience_result': str(is_audience_result),
     'total_execution_time': round(time.time() - total_start_time, 3),
     'embedding_generation_duration': round(embedding_duration, 3),
     'similar_questions_duration': round(similar_questions_duration, 3),
@@ -893,6 +910,8 @@ def call_gen_sql(question):
     'bq_execution_duration': round(bq_execution_duration, 3),
     'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3)
   }
+
+  logger.info("Generated object: \n" + str(response))
 
   return response
 

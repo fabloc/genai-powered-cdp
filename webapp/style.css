@@ -1,0 +1,133 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: Arial, sans-serif;
+    font-size: 0.9em;
+}
+
+.container {
+    margin: 0 auto;
+    max-width: 1000px;
+    padding: 20px;
+  }
+  
+  header {
+    text-align: center;
+    padding-bottom: 20px;
+  }
+
+main {
+    position: absolute;
+    top: 30%;
+    min-width: 1000px;
+}
+
+.search-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    height: 30px;
+}
+
+.search-bar input {
+    padding: 9px;
+    border: 1px solid #ccc;
+    border-top-left-radius: 3px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-left-radius: 3px;
+    flex-grow: 1;
+    font-size: 1.2em;
+}
+
+.search-bar button {
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: #fff;
+    border: none;
+    border-top-left-radius: 0;
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+    border-bottom-left-radius: 0;
+    cursor: pointer;
+    font-size: 1.2em;
+}
+
+.pest-area {
+    min-height: 15px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    padding: 20px;
+    white-space: pre-wrap;
+    margin-bottom: 15px;
+}
+
+.audience-area {
+    width: 100px;
+    min-height: 15px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    padding: 20px;
+    margin: auto;
+    margin-bottom: 15px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 1.5em;
+    color: blue;
+}
+
+.time-area {
+    width: 100px;
+    min-height: 15px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    padding: 20px;
+    white-space: pre-wrap;
+    margin: auto;
+    text-align: center;
+    font-size: 1.5em;
+}
+
+.aligned-boxes {
+    display: table-cell;
+}
+
+.centered {
+    margin: auto;
+    display: table;
+    width: 50%;
+}
+
+.sql-generation-container {
+    margin: auto;
+    margin-top: 100px;
+    width: 100%;
+    height: 200px;
+}
+
+.audience-container {
+    margin: auto;
+    width: 100%;
+}
+
+.result-header {
+    font-weight: bold;
+    font-size: 1.2em;
+    text-align: center;
+    margin-top: 30px;
+    margin-bottom: 5px;
+}
+
+.generation-time-header {
+    font-weight: bold;
+    font-size: 1.2em;
+    text-align: center;
+}
+
+.metrics-centered {
+    margin: auto;
+    margin-top: 100px;
+    display: table;
+    width: 50%;
+}
