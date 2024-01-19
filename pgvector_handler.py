@@ -117,11 +117,10 @@ def add_table_desc_2_pgvector(table_comments_df):
 
     epoch_time = datetime.now(timezone.utc)
 
-    requestor=str(cfg.auth_user)
     for index, row in table_comments_df.iterrows():
         embeddings=[]
         # Define ID ... hashed value of the question+requestor+schema
-        q_value=str(cfg.dataproject_id) + '.' + str(cfg.source_type) + '.' + str(cfg.requestor)+ '.' + str(row['owner']) + '.' + str(row['table_name']) + '.' + str(row['detailed_description'])
+        q_value=str(cfg.dataproject_id) + '.' + str(cfg.source_type) + '.' + str(cfg.auth_user)+ '.' + str(row['owner']) + '.' + str(row['table_name']) + '.' + str(row['detailed_description'])
         hash_object = hashlib.md5(str(q_value).encode())
         hex_dig = hash_object.hexdigest()
         idx=str(hex_dig)
@@ -132,7 +131,7 @@ def add_table_desc_2_pgvector(table_comments_df):
         insert into table_embeddings(id,detailed_description,requestor,table_catalog,table_schema,table_name,added_epoch,source_type,embedding)
         values(\'{idx}\',
         \'{str(row['detailed_description']).replace("'","''")}\',
-        \'{str(requestor).replace("'","''")}\',
+        \'{str(cfg.auth_user).replace("'","''")}\',
         \'{str(cfg.dataproject_id).replace("'","''")}\',
         \'{str(row['owner']).replace("'","''")}\',
         \'{str(row['table_name']).replace("'","''")}\',
@@ -147,14 +146,13 @@ def add_table_desc_2_pgvector(table_comments_df):
 
 def pgvector_table_desc_exists(df: DataFrame):
 
-    requestor=str(cfg.auth_user)
     uninitialized_tables = []
     for index, row in df.iterrows():
 
         table_sql=f'''
         select detailed_description from table_embeddings
         where
-            requestor=\'{str(requestor)}\' and
+            requestor=\'{str(cfg.auth_user)}\' and
             table_catalog=\'{str(cfg.dataproject_id)}\' and
             table_schema=\'{str(row['owner'])}\' and
             table_name=\'{str(row['table_name'])}\'

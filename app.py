@@ -5,7 +5,13 @@ import nl2sql, pgvector_handler
 
 def slow_echo(message, history):
     generated_query = nl2sql.call_gen_sql(message)
-    return '<center>' + generated_query['sql_result'] + '</center><br/>Generated SQL:<br/>' + generated_query['generated_sql']
+    if generated_query['status'] == 'success':
+        response = '<center>' + generated_query['sql_result'] + '</center><br/>Generated SQL:<br/>' + generated_query['generated_sql']
+    else:
+        response = generated_query['error_message']
+        if 'generated_sql' in generated_query:
+            response += '\nBest generated SQL query:\n' + generated_query['generated_sql']
+    return response
 
 demo = gr.ChatInterface(slow_echo)
 

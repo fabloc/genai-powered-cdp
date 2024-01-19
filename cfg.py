@@ -26,7 +26,8 @@ user_dataset = tables_config['user_dataset']
 # Execution variables
 sql_validation = execution_config['sql_validation']
 inject_one_error = execution_config.getboolean('inject_one_error')
-sql_max_fix_retry = execution_config.getint('sql_max_fix_retry')
+sql_max_error_retry = execution_config.getint('sql_max_error_retry')
+sql_max_explanation_retry = execution_config.getint('sql_max_explanation_retry')
 auto_add_knowngood_sql = execution_config.getboolean('auto_add_knowngood_sql')
 
 # Analytics variables
@@ -55,3 +56,29 @@ num_sql_matches = vector_config.getint('num_sql_matches')
 m =  vector_config.getint('m')
 ef_construction = vector_config.getint('ef_construction')
 operator =  vector_config['operator']  # ["vector_cosine_ops", "vector_l2_ops", "vector_ip_ops"]
+
+# Prompt Configuration
+not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
+prompt_guidelines = f"""
+    - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: {not_related_msg}
+    - Join as minimal tables as possible.
+    - When joining tables ensure all join columns are the same data_type.
+    - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
+    - When asked to count the number of users, always perform an estimation using Hyperloglog++ (HLL) sketches using HLL_COUNT.MERGE.
+    - For all requests not related to the number of users matching certain criteria, never use estimates like HyperLogLog++ (HLL) sketches
+    - Never use GROUP BY on HLL sketches.
+    - Never use HLL_COUNT.EXTRACT or HLL_COUNT.MERGE inside a WHERE statement.
+    - HLL_COUNT.EXTRACT must be used only for HLL sketches.
+    - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
+    - Don't include any comments in code.
+    - Remove ```sql and ``` from the output and generate the SQL in single line.
+    - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
+    - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
+    - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.
+    - Use ONLY the column names (column_name) mentioned in Table Schema. DO NOT USE any other column names outside of this.
+    - Associate column_name mentioned in Table Schema only to the table_name specified under Table Schema.
+    - Use SQL 'AS' statement to assign a new name temporarily to a table column or even a table wherever needed.
+    - Table names are case sensitive. DO NOT uppercase or lowercase the table names.
+    - Owner (dataset) is case sensitive. DO NOT uppercase or lowercase the owner.
+    - Project_id is case sensitive. DO NOT uppercase or lowercase the project_id.
+    """

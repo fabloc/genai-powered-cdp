@@ -1,10 +1,7 @@
-google-cloud-firestore
+google-cloud
 google-cloud-bigquery
-google-cloud-aiplatform
-shapely
 sqlalchemy
 asyncio
-pandas
 pandas_gbq
 pg8000
 gradio

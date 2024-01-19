@@ -10,6 +10,7 @@ from logging import exception
 import pgvector_handler
 import os, logging, json, time, re
 import cfg
+import chat_session
 
 
 class UserSession:
@@ -112,7 +113,7 @@ project_id, owner, table_name
 
 
 get_table_comments_sql='''
-select TABLE_CATALOG as project_id, TABLE_SCHEMA as owner, TABLE_NAME as table_name, OPTION_NAME, OPTION_TYPE, OPTION_VALUE as comments
+select TABLE_CATALOG as project_id, TABLE_SCHEMA as owner, TABLE_NAME as table_name, OPTION_NAME, OPTION_TYPE, TRIM(OPTION_VALUE, '"') as comments
 FROM
     {cfg.user_dataset}.INFORMATION_SCHEMA.TABLE_OPTIONS
 WHERE
@@ -159,13 +160,13 @@ def createModel(PROJECT_ID, REGION, model_id):
   from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel
 
   if model_id == 'code-bison-32k':
-    model = CodeGenerationModel.from_pretrained('code-bison-32k')
+    model = CodeGenerationModel.from_pretrained(model_id)
   elif model_id == 'gemini-pro':
     model = GenerativeModel(model_id)
   elif model_id == 'codechat-bison-32k':
-    model = CodeChatModel.from_pretrained("codechat-bison-32k")
+    model = CodeChatModel.from_pretrained(model_id)
   elif model_id == 'chat-bison-32k':
-    model = ChatModel.from_pretrained("chat-bison-32k")
+    model = ChatModel.from_pretrained(model_id)
   else:
     raise ValueError
   return model
@@ -349,16 +350,12 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
     #self.logger.info('\n' + cur_table_owner + '.' + cur_table_name + ':')
 
     table_cols=[]
-    table_cols_datatype=[]
-    table_cols_description=[]
     table_pk_cols=[]
     table_fk_cols=[]
 
     for index, row in columns_df.loc[ (columns_df['owner'] == cur_table_owner) & (columns_df['table_name'] == cur_table_name) ].iterrows():
       # Inside each owner.table_name combination
-      table_cols.append( row['column_name']  )
-      table_cols_datatype.append( row['column_name'] + ' (' + row['data_type'] + ') '  )
-      table_cols_description.append( '\n        - ' + row['column_name'] + ' (' + row['column_description'] + ')'  )
+      table_cols.append('Column: ' + row['column_name'] + ' - Data Type: ' + row['data_type'] + ' - Description: ' + row['column_description'])
 
     for index, row in pkeys_df.loc[ (pkeys_df['owner'] == cur_table_owner) & (pkeys_df['table_name'] == cur_table_name)  ].iterrows():
       # Inside each owner.table_name combination
@@ -382,16 +379,15 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
     else:
       final_fk_cols = ",".join(table_fk_cols)
 
+    ln = '\n      '
     aug_table_desc=f"""
-      Table Name: {cur_full_table} |
-      Owner: {cur_table_owner} |
-      Schema Columns:{", ".join(table_cols)} |
-      Column Types: {", ".join(table_cols_datatype)} |
-      Column Descriptions: {"".join(table_cols_description)} |
+      [SCHEMA details for table `{cur_full_table}`] |
+      {ln.join(table_cols)} |
       Primary Key: {final_pk_cols} |
       Foreign Keys: {final_fk_cols} |
+      Owner: {cur_table_owner} |
       Project_id: {str(row_aug['project_id'])} |
-      Table Comments: {str(row_aug['comments'])}
+      Table Description: {str(row_aug['comments'])}
     """
 
     #self.logger.info ('Current aug dataset row: '  + str(row_aug['table_name']))
@@ -399,6 +395,7 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
 
     # Works well
     aug_table_comments_df.at[index_aug, 'detailed_description'] = aug_table_desc
+    logger.info("Table schema: \n" + aug_table_desc)
   return aug_table_comments_df
 
 
@@ -455,51 +452,14 @@ def generate_sql(context_prompt):
   return generated_sql
 
 
-def chat_send_message(chat_session, context_prompt):
-  generated_text = chat_session.send_message(context_prompt)
-  logger.info("Generated text: " + generated_text.candidates[0].text)
-  return generated_text.candidates[0].text
-
-
-def clean_sql(result):
-  result = result.replace("```sql", "").replace("```", "")
-  return result
-
-
-def clean_json(result):
-  result = result.replace("```json", "").replace("```", "")
-  return result
-
-
 def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   context_prompt = f"""
 
-      You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the following question while using the provided context to correctly refer to the BigQuery tables and the needed column names.
+    You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the following question while using the provided context to correctly refer to the BigQuery tables and the needed column names.
 
-      Guidelines:
-      - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: {not_related_msg}
-      - Join as minimal tables as possible.
-      - When joining tables ensure all join columns are the same data_type.
-      - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
-      - When asked to count the number of users, always perform an estimation using Hyperloglog++ (HLL) sketches using HLL_COUNT.MERGE.
-      - For all requests not related to the number of users matching certain criteria, never use estimates like HyperLogLog++ (HLL) sketches
-      - Never use GROUP BY on HLL sketches.
-      - Never use HLL_COUNT.EXTRACT or HLL_COUNT.MERGE inside a WHERE statement.
-      - HLL_COUNT.EXTRACT must be used only for HLL sketches.
-      - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
-      - Don't include any comments in code.
-      - Remove ```sql and ``` from the output and generate the SQL in single line.
-      - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
-      - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
-      - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.
-      - Use ONLY the column names (column_name) mentioned in Table Schema. DO NOT USE any other column names outside of this.
-      - Associate column_name mentioned in Table Schema only to the table_name specified under Table Schema.
-      - Use SQL 'AS' statement to assign a new name temporarily to a table column or even a table wherever needed.
-      - Table names are case sensitive. DO NOT uppercase or lowercase the table names.
-      - Column names are case sensitive. DO NOT uppercase or lowercase the column names.
-      - Owner (dataset) is case sensitive. DO NOT uppercase or lowercase the owner.
-      - Project_id is case sensitive. DO NOT uppercase or lowercase project_id.
+    Guidelines:
+    {cfg.prompt_guidelines}
 
     Table Schema:
     {table_result_joined}
@@ -522,121 +482,46 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
 
   return context_query
 
-
-    # Question: Display a count of orders by customer_email
-    # Generated SQL:
-    # SELECT u.email as email, count(*) as count_oders
-    # FROM
-    # `bigquery-public-data.thelook_ecommerce.orders` o,`bigquery-public-data.thelook_ecommerce.users` u
-    #   where o.user_id = u.id
-    #   group by email;
-
-
-def test_sql_plan_execution(generated_sql):
-  from google.cloud import bigquery
-  try:
-
-    df=pd.DataFrame()
-
-    # Construct a BigQuery client object.
-    client = bigquery.Client(project=cfg.project_id)
-
-    job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
-
-    # Start the query, passing in the extra configuration.
-    query_job = client.query(
-        (generated_sql),
-        job_config=job_config,
-    )  # Make an API request.
-
-    # A dry run query completes immediately.
-    logger.info("This query will process {} bytes.".format(query_job.total_bytes_processed))
-    return 'Execution Plan OK'
-  except Exception as e:
-    logger.error(e)
-    msg= str(e.errors[0]['message'])
-    return msg
-
-
-def init_chat():
+def sql_explain(question, generated_sql, table_schema):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
-
+  response_json = {
+    'sql_explanation': '{explanation of the generated SQL}',
+    'is_matching': '{Answer True or False depending on whether the generated SQL explanation matches the reference question}',
+    'mismatch_details': '{If there is a mismatch, provide details here}'
+  }
   context_prompt = f"""
 
-    You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
-    As the user provides versions of the query and the errors returned by BigQuery,
-    return a never seen alternative SQL query that fixes the errors.
-    It is important that the query still answer the original question.
+You are a BigQuery SQL guru. Write a high-level concise explanation of what a given SQL query does, and then semantically compare the explanation with the reference question.
+Complete the response with true or false depending on whether the explanation matches the reference question.
 
-      Guidelines:
-      - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: {not_related_msg}
-      - Join as minimal tables as possible.
-      - When joining tables ensure all join columns are the same data_type.
-      - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
-      - When asked to count the number of users, always perform an estimation using Hyperloglog++ (HLL) sketches using HLL_COUNT.MERGE.
-      - For all requests not related to the number of users matching certain criteria, never use estimates like HyperLogLog++ (HLL) sketches
-      - Never use GROUP BY on HLL sketches.
-      - Never use HLL_COUNT.EXTRACT or HLL_COUNT.MERGE inside a WHERE statement.
-      - HLL_COUNT.EXTRACT must be used only for HLL sketches.
-      - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
-      - Don't include any comments in code.
-      - Remove ```sql and ``` from the output and generate the SQL in single line.
-      - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
-      - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
-      - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.
-      - Use ONLY the column names (column_name) mentioned in Table Schema. DO NOT USE any other column names outside of this.
-      - Associate column_name mentioned in Table Schema only to the table_name specified under Table Schema.
-      - Use SQL 'AS' statement to assign a new name temporarily to a table column or even a table wherever needed.
-      - Table names are case sensitive. DO NOT uppercase or lowercase the table names.
-      - Owner (dataset) is case sensitive. DO NOT uppercase or lowercase the owner.
-      - Project_id is case sensitive. DO NOT uppercase or lowercase the project_id.
+Guidelines:
+  - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations).
+  - In the response, don't deep-dive into the details of the SQL query.
+  - Never mention the column names in the explanation, instead use natural language equivalent.
+  - Never refer to the filters in the SQL query.
+  - When comparing the explanation and the reference question, make sure to compare the values.
+  - If the explanation and the reference question don't match, give the details of the mismatch.
+  - Answer using the following format:
+  {json.dump(response_json)}
 
-  """
-  logger.info('Initializing code chat model ...')
-  chat_session = chat_model.start_chat(context=context_prompt)
-  logger.info('Code chat model initialized')
-  # context_prompt
-  return chat_session
+Table Schema:
+{table_schema}
 
+SQL:
+{generated_sql}
 
+Reference Question:
+{question}
+"""
 
-def rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, error_msg, similar_questions):
+    #Column Descriptions:
+    #{column_result_joined}
 
-  context_prompt = f"""
-    What is an alternative SQL statement to address the error mentioned below?
-    Present a different SQL from previous ones. It is important that the query still answer the original question.
-    Do not repeat suggestions.
+  logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  Question:
-  {question}
+  context_query = generate_sql(context_prompt)
 
-  Previously Generated (bad) SQL Query:
-  {generated_sql}
-
-  Error Message:
-  {error_msg}
-
-  Table Schema:
-  {table_result_joined}
-
-  {similar_questions}
-  """
-
-  #Column Descriptions:
-  #{column_result_joined}
-
-  logger.info("SQL rewritten prompt:\n" + context_prompt)
-
-  response = chat_send_message(chat_session, context_prompt)
-
-  #self.logger.info(str(response))
-  return clean_sql(response)
-
-
-#question="Display the result of selecting test word from dual"
-#final_sql='select \'test\' from dual'
-#ret=add_vector_sql_collection('HR', question, final_sql, 'Y')
-#self.logger.info( ret )
+  return context_query
 
 
 def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, failure_step, error_msg):
@@ -734,8 +619,9 @@ def call_gen_sql(question):
 
   total_start_time = time.time()
   generated_sql = ''
-  sql_result = ''
+  sql_result_df = None
   matched_tables = []
+  status = 'error'
 
   embedding_duration = ''
   similar_questions_duration = ''
@@ -775,9 +661,12 @@ def call_gen_sql(question):
 
       unrelated_question=False
       stop_loop = False
-      retry_max_count= cfg.sql_max_fix_retry
-      retry_count=0
-      chat_session=None
+      error_retry_max_count= cfg.sql_max_error_retry
+      explanation_retry_max_count = cfg.sql_max_explanation_retry
+      error_retry_count=0
+      explanation_retry_count = 0
+      error_correction_chat_session=None
+      explanation_correction_chat_session=None
       logger.info("Now looking for appropriate tables in Vector to answer the question...")
       start_time = time.time()
       table_result_joined = pgvector_handler.get_tables_colums_vector(question, question_text_embedding)
@@ -801,7 +690,7 @@ def call_gen_sql(question):
             #logger.info('Inside if statement to check for unrelated question...')
             unrelated_question=True
           if cfg.inject_one_error is True:
-            if retry_count < 1:
+            if error_retry_count < 1:
               logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
               generated_sql=generated_sql + ' ROWID'
       else:
@@ -814,6 +703,7 @@ def call_gen_sql(question):
         start_time = time.time()
         logger.info('Executing SQL query...')
         bq_query_execution_status = 'Success'
+        start_time = time.time()
 
         try:
           sql_result_df=execute_sql(generated_sql)
@@ -829,10 +719,9 @@ def call_gen_sql(question):
             raise Exception(err)
         except Exception as error:
           print(error)
-        bq_execution_duration = time.time() - start_time
-
-        logger.info('SQL query complete')
-        bq_execution_duration = time.time() - start_time
+        finally:
+          bq_execution_duration = start_time + time.time()
+          logger.info("SQL execution complete")
 
         if bq_query_execution_status == 'Success':
           stop_loop = True
@@ -843,38 +732,57 @@ def call_gen_sql(question):
           if cfg.auto_add_knowngood_sql is True:  #### Adding to the Known Good SQL Vector DB
             if len(sql_result_df) >= 1:
               if not "ORA-" in str(sql_result_df.iloc[0,0]):
-                  logger.info('Adding Known Good SQL to Vector DB...')
-                  start_time = time.time()
-                  pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
-                  sql_added_to_vector_db_duration = time.time() - start_time
-                  logger.info('SQL added to Vector DB')
+                  # Check whether the generated query actually answers the initial question by invoking GenAI
+                  # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
+                  sql_explanation = sql_explain(question, generated_sql, table_result_joined)
+                  logger.info('Generated SQL explanation: ' + sql_explanation)
+                  if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
+                    logger.info("Generated SQL explanation matches initial question. Adding Known Good SQL to Vector DB...")
+                    start_time = time.time()
+                    pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
+                    sql_added_to_vector_db_duration = time.time() - start_time
+                    logger.info('SQL added to Vector DB')
+                    status = 'success'
+                  else:
+                    # If generated SQL does not match initial question, start again by asking GenAI model to adapt the query
+                    stop_loop = False
+                    if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(model)
+                    generated_sql = explanation_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
+                    explanation_retry_count+=1
               else:
                   ### Need to call retry
                   stop_loop = False
-                  if chat_session is None: chat_session = init_chat()
-                  rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, str(sql_result_df.iloc[0,0]) ,similar_questions_return)
-                  generated_sql=rewrite_result
-                  retry_count+=1
+                  if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(model)
+                  generated_sql = error_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
+                  error_retry_count+=1
 
           appen_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'N', '', '')
 
         else:  # Failure on BigQuery SQL execution
             logger.info("Error during SQL execution")
-            logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(retry_count))
+            logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(error_retry_count))
             append_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'Y', 'explain_plan_validation', bq_query_execution_status )
             ### Need to call retry
-            if chat_session is None: chat_session = init_chat()
-            rewrite_result = rewrite_sql_chat(chat_session, question, generated_sql, table_result_joined, bq_query_execution_status, similar_questions_return)
+            if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(model)
+            rewrite_result = error_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status, similar_questions_return)
             logger.info('\n Rewritten SQL:\n' + rewrite_result)
             generated_sql=rewrite_result
-            retry_count+=1
+            error_retry_count+=1
 
-        if retry_count > retry_max_count:
+        if error_retry_count > error_retry_max_count:
           stop_loop = True
+          error_message = "Can't correct generated SQL query."
+        
+        if explanation_retry_count > explanation_retry_max_count:
+          stop_loop = True
+          error_message = "Can't correct irrelevant SQL query."
 
       # After the while is completed
-      if retry_count > retry_max_count:
-        logger.info('Oopss!!! Could not find a good SQL. This is the best I came up with !!!!!\n' + generated_sql)
+      if error_retry_count > error_retry_max_count:
+        logger.info('Oopss!!! Could not find a valid SQL. This is the best I came up with !!!!!\n' + generated_sql)
+
+      if explanation_retry_count > explanation_retry_max_count:
+        logger.info('Oopss!!! Could not find a SQL exactly matching the question. This is the best I came up with !!!!!\n' + generated_sql)
 
       # If query is unrelated to the dataset
       if unrelated_question is True:
@@ -901,25 +809,32 @@ def call_gen_sql(question):
       logger.info('will call append to bq next')
       appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
-    if 'hll_user_aggregates' in matched_tables:
-      sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
-      is_audience_result = True
+      status = 'success'
+
+    if sql_result_df != None:
+      if 'hll_user_aggregates' in matched_tables:
+        sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
+        is_audience_result = True
+      else:
+        sql_result_str = sql_result_df.to_html()
+        is_audience_result = True
     else:
-      sql_result_str = sql_result.to_html()
-      is_audience_result = True
+      sql_result_str = ''
+      is_audience_result = False
 
     response = {
-      'status': 'success',
+      'status': status,
+      'error_message': error_message if sql_result_df == None else None,
       'generated_sql': '<pre>' + generated_sql + '</pre>',
-      'sql_result': sql_result_str,
-      'is_audience_result': str(is_audience_result),
+      'sql_result': sql_result_str if sql_result_df != None else None,
+      'is_audience_result': str(is_audience_result) if sql_result_df != None else None,
       'total_execution_time': round(time.time() - total_start_time, 3),
       'embedding_generation_duration': round(embedding_duration, 3),
       'similar_questions_duration': round(similar_questions_duration, 3),
       'table_matching_duration': round(table_matching_duration, 3),
       'sql_generation_duration': round(sql_generation_duration, 3),
       'bq_execution_duration': round(bq_execution_duration, 3),
-      'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3)
+      'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3) if sql_result_df != None else None
     }
 
     logger.info("Generated object: \n" + str(response))
