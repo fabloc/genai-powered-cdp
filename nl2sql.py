@@ -197,57 +197,6 @@ def add_table_comments(columns_df, pkeys_df, fkeys_df, table_comments_df):
   return table_comments_df
 
 
-def add_column_comments(columns_df, pkeys_df, fkeys_df, table_comments_df):
-  for index, row in columns_df.iterrows():
-    if row['column_description'] is None: ## or row['comments'] is not None:
-        context_prompt = f"""
-        Generate comments for the column {row['project_id']}.{row['owner']}.{row['table_name']}.{row['column_name']}
-
-
-        Parameters:
-        - column metadata: {columns_df.to_markdown(index = False)}
-        - primary key metadata: {pkeys_df.to_markdown(index = False)}
-        - foreign keys metadata: {fkeys_df.to_markdown(index = False)}
-        - table metadata: {table_comments_df.to_markdown(index = False)}
-
-      """
-        context_query = generate_sql(context_prompt)
-        columns_df.at[index, 'column_comments'] = context_query
-        #columns_df.at[index, 'column_comments'] = clean_sql("my comments")
-
-  return columns_df
-
-def get_column_sample(columns_df):
-  sample_column_list=[]
-
-  for index, row in columns_df.iterrows():
-    get_column_sample_sql=f'''
-        SELECT STRING_AGG(CAST(value AS STRING)) as sample_values
-        FROM UNNEST((SELECT APPROX_TOP_COUNT(TO_JSON_STRING({row["column_name"]}), 5) as osn
-                    FROM `{row["project_id"]}.{row["owner"]}.{row["table_name"]}`
-                ))
-    '''
-    try:
-      column_samples_df = schema_generator(get_column_sample_sql)
-      sample_column_list.append(column_samples_df['sample_values'].to_string(index=False))
-    except Exception as err:
-      column_name = str(row["column_name"])
-      if "Reason: 400 Cannot access field" in err.args[0] and ("STRUCT" in err.args[0] or "ARRAY" in err.arg[0]):
-        logger.info("Cannot parse column '" + column_name + "' with type STRUCT and/or ARRAY, skipping")
-      else:
-        logger.error("Error gathering samples for column " + str(row["column_name"]) + " - with error: " + str(err[0]))
-      sample_column_list.append('')
-
-
-  columns_df["sample_values"]=sample_column_list
-  return columns_df
-
-def serialized_detailed_description(df):
-    detailed_desc = ''
-    for index, row in df.iterrows():
-        detailed_desc = detailed_desc + str(row['detailed_description']) + '\n'
-    return detailed_desc
-
 def get_tables(df):
   tables = []
   for _, row in df.iterrows():
@@ -268,6 +217,13 @@ def insert_sample_queries_lookup(tables_list):
         question_text_embedding = pgvector_handler.text_embedding(question)
         pgvector_handler.add_vector_sql_collection(cfg.schema, sql_query['question'], sql_query['sql_query'], question_text_embedding, 'Y')
   return queries_samples
+
+
+def serialized_detailed_description(df):
+    detailed_desc = ''
+    for index, row in df.iterrows():
+        detailed_desc = detailed_desc + str(row['detailed_description']) + '\n'
+    return detailed_desc
 
 
 def init_table_and_columns_desc():
@@ -294,7 +250,7 @@ def init_table_and_columns_desc():
       pkeys_df = schema_generator(get_pkeys_sql)
 
       # Adding column sample_values to the columns dataframe
-      columns_df = get_column_sample(columns_df)
+      #columns_df = get_column_sample(columns_df)
 
       # Look at each tables dataframe row and use LLM to generate a table comment, but only for the tables with null comments (DB did not have comments on table)
       ## Using Palm to add table comments if comments are null
@@ -305,24 +261,7 @@ def init_table_and_columns_desc():
       # Dump the table description
       table_desc = serialized_detailed_description(table_comments_df)
 
-      # file = open("table_desc.txt", "w")
-      # file.write(table_desc)
-      # file.close()
-
       pgvector_handler.add_table_desc_2_pgvector(table_comments_df)
-
-      # Look at each column in the columns dataframe use LLM to generate a column comment, if one does not exist
-      columns_df = add_column_comments(columns_df, pkeys_df, fkeys_df, table_comments_df)
-
-      columns_df = build_column_desc(columns_df)
-
-      column_desc = serialized_detailed_description(columns_df)
-
-      # file = open("column_desc.txt", "w")
-      # file.write(column_desc)
-      # file.close()
-
-      pgvector_handler.add_column_desc_2_pgvector(columns_df)
 
     # Look for files listing sample queries to be ingested in the pgVector DB
     #insert_sample_queries_lookup(tables_list)
@@ -355,7 +294,7 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
 
     for index, row in columns_df.loc[ (columns_df['owner'] == cur_table_owner) & (columns_df['table_name'] == cur_table_name) ].iterrows():
       # Inside each owner.table_name combination
-      table_cols.append('Column: ' + row['column_name'] + ' - Data Type: ' + row['data_type'] + ' - Description: ' + row['column_description'])
+      table_cols.append(row['column_name'] + ' (' + row['data_type'] + ') - ' + row['column_description'])
 
     for index, row in pkeys_df.loc[ (pkeys_df['owner'] == cur_table_owner) & (pkeys_df['table_name'] == cur_table_name)  ].iterrows():
       # Inside each owner.table_name combination
@@ -379,19 +318,17 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
     else:
       final_fk_cols = ",".join(table_fk_cols)
 
-    ln = '\n      '
+    ln = ' |\n    '
     aug_table_desc=f"""
-      [SCHEMA details for table `{cur_full_table}`] |
-      {ln.join(table_cols)} |
-      Primary Key: {final_pk_cols} |
-      Foreign Keys: {final_fk_cols} |
-      Owner: {cur_table_owner} |
-      Project_id: {str(row_aug['project_id'])} |
-      Table Description: {str(row_aug['comments'])}
+    [Table]: `{cur_full_table}`
+    [Table Description]: {str(row_aug['comments'])}
+    [Column (type) - Description]:
+    {ln.join(table_cols)}
+    [Primary Key]: {final_pk_cols}
+    [Foreign Keys]: {final_fk_cols}
+    [Owner]: {cur_table_owner}
+    [Project_id]: {str(row_aug['project_id'])}
     """
-
-    #self.logger.info ('Current aug dataset row: '  + str(row_aug['table_name']))
-    #self.logger.info(aug_table_desc)
 
     # Works well
     aug_table_comments_df.at[index_aug, 'detailed_description'] = aug_table_desc
@@ -461,7 +398,7 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
     Guidelines:
     {cfg.prompt_guidelines}
 
-    Table Schema:
+    Tables Schema:
     {table_result_joined}
 
     {similar_questions}
@@ -486,7 +423,7 @@ def sql_explain(question, generated_sql, table_schema):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   response_json = {
     'sql_explanation': '{explanation of the generated SQL}',
-    'is_matching': '{Answer True or False depending on whether the generated SQL explanation matches the reference question}',
+    'is_matching': '{Answer "True" or "False" depending on whether the generated SQL explanation matches the reference question}',
     'mismatch_details': '{If there is a mismatch, provide details here}'
   }
   context_prompt = f"""
@@ -502,9 +439,9 @@ Guidelines:
   - When comparing the explanation and the reference question, make sure to compare the values.
   - If the explanation and the reference question don't match, give the details of the mismatch.
   - Answer using the following format:
-  {json.dump(response_json)}
+  {json.dumps(response_json)}
 
-Table Schema:
+Tables Schema:
 {table_schema}
 
 SQL:
@@ -519,7 +456,10 @@ Reference Question:
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  context_query = generate_sql(context_prompt)
+  context_query = json.loads(generate_sql(context_prompt))
+
+  if context_query['is_matching'] == 'true':
+    context_query['is_matching'] = True
 
   return context_query
 
@@ -729,32 +669,34 @@ def call_gen_sql(question):
           logger.info('Question: ' + question)
           logger.info('SQL Execution Result:\n' + str(sql_result_df))
 
-          if cfg.auto_add_knowngood_sql is True:  #### Adding to the Known Good SQL Vector DB
-            if len(sql_result_df) >= 1:
-              if not "ORA-" in str(sql_result_df.iloc[0,0]):
-                  # Check whether the generated query actually answers the initial question by invoking GenAI
-                  # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
-                  sql_explanation = sql_explain(question, generated_sql, table_result_joined)
-                  logger.info('Generated SQL explanation: ' + sql_explanation)
-                  if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
-                    logger.info("Generated SQL explanation matches initial question. Adding Known Good SQL to Vector DB...")
+
+          if len(sql_result_df) >= 1:
+            if not "ORA-" in str(sql_result_df.iloc[0,0]):
+                # Check whether the generated query actually answers the initial question by invoking GenAI
+                # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
+                sql_explanation = sql_explain(question, generated_sql, table_result_joined)
+                logger.info('Generated SQL explanation: ' + json.dumps(sql_explanation))
+                if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
+                  logger.info("Generated SQL explanation matches initial question.")
+                  if cfg.auto_add_knowngood_sql is True:  #### Adding to the Known Good SQL Vector DB
+                    logger.info("Adding Known Good SQL to Vector DB...")
                     start_time = time.time()
                     pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
                     sql_added_to_vector_db_duration = time.time() - start_time
                     logger.info('SQL added to Vector DB')
-                    status = 'success'
-                  else:
-                    # If generated SQL does not match initial question, start again by asking GenAI model to adapt the query
-                    stop_loop = False
-                    if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(model)
-                    generated_sql = explanation_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
-                    explanation_retry_count+=1
-              else:
-                  ### Need to call retry
+                  status = 'success'
+                else:
+                  # If generated SQL does not match initial question, start again by asking GenAI model to adapt the query
                   stop_loop = False
-                  if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(model)
-                  generated_sql = error_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
-                  error_retry_count+=1
+                  if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(model)
+                  generated_sql = explanation_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
+                  explanation_retry_count+=1
+            else:
+                ### Need to call retry
+                stop_loop = False
+                if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(model)
+                generated_sql = error_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
+                error_retry_count+=1
 
           appen_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'N', '', '')
 
@@ -769,13 +711,14 @@ def call_gen_sql(question):
             generated_sql=rewrite_result
             error_retry_count+=1
 
-        if error_retry_count > error_retry_max_count:
-          stop_loop = True
-          error_message = "Can't correct generated SQL query."
-        
-        if explanation_retry_count > explanation_retry_max_count:
-          stop_loop = True
-          error_message = "Can't correct irrelevant SQL query."
+        if stop_loop != True:
+          if error_retry_count > error_retry_max_count:
+            stop_loop = True
+            error_message = "Can't correct generated SQL query."
+          
+          if explanation_retry_count > explanation_retry_max_count:
+            stop_loop = True
+            error_message = "Can't correct irrelevant SQL query."
 
       # After the while is completed
       if error_retry_count > error_retry_max_count:
@@ -787,6 +730,9 @@ def call_gen_sql(question):
       # If query is unrelated to the dataset
       if unrelated_question is True:
         logger.info('Question cannot be answered using this dataset!')
+        error_message = 'Question cannot be answered using the configured datasets'
+        sql_generation_duration = -1
+        bq_execution_duration = -1
         append_2_bq_result = append_2_bq(
           cfg.model_id,
           question,
@@ -811,7 +757,7 @@ def call_gen_sql(question):
 
       status = 'success'
 
-    if sql_result_df != None:
+    if sql_result_df is not None:
       if 'hll_user_aggregates' in matched_tables:
         sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
         is_audience_result = True
@@ -824,17 +770,17 @@ def call_gen_sql(question):
 
     response = {
       'status': status,
-      'error_message': error_message if sql_result_df == None else None,
-      'generated_sql': '<pre>' + generated_sql + '</pre>',
-      'sql_result': sql_result_str if sql_result_df != None else None,
-      'is_audience_result': str(is_audience_result) if sql_result_df != None else None,
+      'error_message': error_message if sql_result_df is None else None,
+      'generated_sql': '<pre>' + generated_sql + '</pre>' if generated_sql != '' else None,
+      'sql_result': sql_result_str if sql_result_df is not None else None,
+      'is_audience_result': str(is_audience_result) if sql_result_df is not None else 'False',
       'total_execution_time': round(time.time() - total_start_time, 3),
       'embedding_generation_duration': round(embedding_duration, 3),
       'similar_questions_duration': round(similar_questions_duration, 3),
       'table_matching_duration': round(table_matching_duration, 3),
-      'sql_generation_duration': round(sql_generation_duration, 3),
-      'bq_execution_duration': round(bq_execution_duration, 3),
-      'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3) if sql_result_df != None else None
+      'sql_generation_duration': round(sql_generation_duration, 3) if sql_generation_duration != -1 else None,
+      'bq_execution_duration': round(bq_execution_duration, 3) if bq_execution_duration != -1 else None,
+      'sql_added_to_vector_db_duration' : round(sql_added_to_vector_db_duration, 3) if sql_result_df is not None and cfg.auto_add_knowngood_sql is True else None
     }
 
     logger.info("Generated object: \n" + str(response))

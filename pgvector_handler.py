@@ -186,45 +186,6 @@ def pgvector_get_data(sql: str):
 
     return table_results_joined
 
-def add_column_desc_2_pgvector(columns_df):
-
-    from datetime import datetime, timezone
-    import hashlib
-    import time
-    epoch_time = datetime.now(timezone.utc)
-
-    requestor=str(cfg.auth_user)
-    for index, row in columns_df.iterrows():
-        embeddings=[]
-        # Define ID ... hashed value of the question+requestor+schema
-        q_value=str(cfg.dataproject_id) + '.' + str(cfg.source_type) + '.' + str(requestor) + '.' + str(row['owner']) + '.' + str(row['table_name']) + '.' + str(row['column_name']) + '.' + str(row['detailed_description'])
-        hash_object = hashlib.md5(str(q_value).encode())
-        hex_dig = hash_object.hexdigest()
-        idx=str(hex_dig)
-
-
-        embeddings=text_embedding(str(row['detailed_description']))
-
-        sql=f'''
-        insert into column_embeddings(id,detailed_description,requestor,table_catalog,table_schema,table_name,column_name,added_epoch,source_type,embedding)
-        values(\'{idx}\',
-        \'{str(row['detailed_description']).replace("'","''")}\',
-        \'{str(requestor).replace("'","''")}\',
-        \'{str(cfg.dataproject_id).replace("'","''")}\',
-        \'{str(row['owner']).replace("'","''")}\',
-        \'{str(row['table_name']).replace("'","''")}\',
-        \'{str(row['column_name']).replace("'","''")}\',
-        \'{epoch_time}\',
-        \'{cfg.source_type}\',
-        \'{embeddings}\')
-        '''
-
-        logger.info("Adding column " + row['column_name'] + " to table entry " + str(cfg.dataproject_id) + '.' + str(row['owner']) + '.' + str(row['table_name']) + " in pgVector DB")
-        logger.debug("SQL: " + sql)
-        ret = connection_mgr.execute_query(sql, write=True)
-
-    return "Columns records added to Vector DB"
-
 
 def get_tables_ann_pgvector(question: str, query: str, group_concat_max_len: int = 102400):
     from sqlalchemy.sql import text

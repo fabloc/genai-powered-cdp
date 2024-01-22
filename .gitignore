@@ -1,3 +1,4 @@
 .env
 *.pyc
 *.log
+test_*.py

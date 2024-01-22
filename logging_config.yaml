@@ -15,7 +15,7 @@ handlers:
     stream: ext://sys.stdout
 loggers:
   nl2sql:
-    level: INFO
+    level: DEBUG
     handlers: [console, file]
     propagate: no
   pgvector_handler:

@@ -67,8 +67,9 @@ prompt_guidelines = f"""
     - When asked to count the number of users, always perform an estimation using Hyperloglog++ (HLL) sketches using HLL_COUNT.MERGE.
     - For all requests not related to the number of users matching certain criteria, never use estimates like HyperLogLog++ (HLL) sketches
     - Never use GROUP BY on HLL sketches.
-    - Never use HLL_COUNT.EXTRACT or HLL_COUNT.MERGE inside a WHERE statement.
-    - HLL_COUNT.EXTRACT must be used only for HLL sketches.
+    - Never use HLL_COUNT.MERGE inside a WHERE statement.
+    - Never use HLL.EXTRACT.
+    - Convert TIMESTAMP to DATE.
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.
     - Remove ```sql and ``` from the output and generate the SQL in single line.

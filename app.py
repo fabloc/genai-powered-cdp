@@ -9,7 +9,7 @@ def slow_echo(message, history):
         response = '<center>' + generated_query['sql_result'] + '</center><br/>Generated SQL:<br/>' + generated_query['generated_sql']
     else:
         response = generated_query['error_message']
-        if 'generated_sql' in generated_query:
+        if 'generated_sql' in generated_query and generated_query['generated_sql'] is not None:
             response += '\nBest generated SQL query:\n' + generated_query['generated_sql']
     return response
 

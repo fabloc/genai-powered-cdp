@@ -62,7 +62,7 @@ class SQLCorrectionChat(SessionChat):
     Error Message:
     {error_msg}
 
-    Table Schema:
+    Tables Schema:
     {table_schema}
 
     Good SQL Examples:
