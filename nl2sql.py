@@ -422,37 +422,34 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
 def sql_explain(question, generated_sql, table_schema):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   response_json = {
-    'sql_explanation': '{explanation of the generated SQL}',
-    'is_matching': '{Answer "True" or "False" depending on whether the generated SQL explanation matches the reference question}',
-    'mismatch_details': '{If there is a mismatch, provide details here}'
+    'sql_explanation': '{generated explanation}',
+    'is_matching': '{Answer with "True" or "False" depending on the outcome of the comparison between the generated explanation and the Target Question}',
+    'mismatch_details': '{Write any identified filtering mismatch between the generated explanation and the Target Question here. If not, return an empty string}'
   }
-  context_prompt = f"""
-
-You are a BigQuery SQL guru. Write a high-level concise explanation of what a given SQL query does, and then semantically compare the explanation with the reference question.
-Complete the response with true or false depending on whether the explanation matches the reference question.
+  context_prompt = f"""You are a BigQuery SQL guru. Generate a high-level filtering behavior explanation of a SQL Query and compare it to a Target Question.
+Return the answer as a json object and highlight any disprepency between the generated explanation and the Target Question.
 
 Guidelines:
-  - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations).
-  - In the response, don't deep-dive into the details of the SQL query.
-  - Never mention the column names in the explanation, instead use natural language equivalent.
-  - Never refer to the filters in the SQL query.
-  - When comparing the explanation and the reference question, make sure to compare the values.
-  - If the explanation and the reference question don't match, give the details of the mismatch.
-  - Answer using the following format:
-  {json.dumps(response_json)}
+    - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations), and the column usage with their description.
+    - In generated_explanation, don't deep-dive into the details of the SQL query.
+    - Never mention the column names in the generated_explanation, instead use natural language equivalent.
+    - Never refer to the SQL query itself in the generated_explanation.
+    - Never mention the filters present in the SQL query in the generated_explanation.
+    - Remove ```json and ``` from the output
+    - Comparison between the generated explanation and the Target Question must focus on the filtering discrepencies. Each filter identified in the generated explanation be required by the Target Question, in terms of attributes involved or of comparison values.
+    - If filters are presentin the generated explanation that are not required by the Target Question, then the generated explanation does not match the Target Question.
+    - Answer using the following json format:
+    {json.dumps(response_json)}
 
-Tables Schema:
+Tables Schemas:
 {table_schema}
 
-SQL:
+SQL Query:
 {generated_sql}
 
-Reference Question:
+Target Question:
 {question}
 """
-
-    #Column Descriptions:
-    #{column_result_joined}
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
