@@ -422,26 +422,24 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
 def sql_explain(question, generated_sql, table_schema):
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   response_json = {
-    'sql_explanation': '{generated explanation}',
-    'is_matching': '{Answer with "True" or "False" depending on the outcome of the comparison between the generated explanation and the Target Question}',
-    'mismatch_details': '{Write any identified filtering mismatch between the generated explanation and the Target Question here. If not, return an empty string}'
+    'sql_explanation': '{ Write the generated explanation, but don\'t deep-dive into the details of the SQL query }',
+    'is_matching': '{Answer with "True" or "False" depending on the outcome of the comparison between generated explanation and the Target Question}',
+    'mismatch_details': '{Write all identified mismatch between generated explanation and the Target Question here. If not, return an empty string}'
   }
-  context_prompt = f"""You are a BigQuery SQL guru. Generate a high-level filtering behavior explanation of a SQL Query and compare it to a Target Question.
-Return the answer as a json object and highlight any disprepency between the generated explanation and the Target Question.
+
+  context_prompt = f"""You are a BigQuery SQL guru. Generate a high-level semantic explanation of a SQL Query and compare it to a Target Question.
+Return the answer as a json object and highlight all the differences identified between the generated explanation and the Target Question.
 
 Guidelines:
-    - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations), and the column usage with their description.
-    - In generated_explanation, don't deep-dive into the details of the SQL query.
-    - Never mention the column names in the generated_explanation, instead use natural language equivalent.
-    - Never refer to the SQL query itself in the generated_explanation.
-    - Never mention the filters present in the SQL query in the generated_explanation.
-    - Remove ```json and ``` from the output
-    - Comparison between the generated explanation and the Target Question must focus on the filtering discrepencies. Each filter identified in the generated explanation be required by the Target Question, in terms of attributes involved or of comparison values.
-    - If filters are presentin the generated explanation that are not required by the Target Question, then the generated explanation does not match the Target Question.
+    - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the columns description.
+    - In the generated explanation, don't deep-dive into the details of the SQL query.
+    - When comparing the generated explanation and the Target Question, be as thorough as possible in spotting difference between the generated explanation and the Target Question.
+    - If one or more conditions is present in the generated explanation and not in the Target Question, then the generated explanation does not match the Target Question.
+    - Remove ```json and ``` from the outputs
     - Answer using the following json format:
     {json.dumps(response_json)}
 
-Tables Schemas:
+Tables Schema:
 {table_schema}
 
 SQL Query:
@@ -686,8 +684,9 @@ def call_gen_sql(question):
                   # If generated SQL does not match initial question, start again by asking GenAI model to adapt the query
                   stop_loop = False
                   if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(model)
-                  generated_sql = explanation_correction_chat_session.get_chat_response(question, generated_sql, table_result_joined, bq_query_execution_status,similar_questions_return)
+                  generated_sql = explanation_correction_chat_session.get_chat_response(table_result_joined, similar_questions_return, question, generated_sql, sql_explanation['sql_explanation'], sql_explanation['mismatch_details'])
                   explanation_retry_count+=1
+                  error_retry_count = 0
             else:
                 ### Need to call retry
                 stop_loop = False
