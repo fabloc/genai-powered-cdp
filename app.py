@@ -5,7 +5,7 @@ import nl2sql, pgvector_handler
 
 def slow_echo(message, history):
     generated_query = nl2sql.call_gen_sql(message)
-    if generated_query['status'] == 'success':
+    if generated_query['status'] == 'Success':
         response = '<center>' + generated_query['sql_result'] + '</center><br/>Generated SQL:<br/>' + generated_query['generated_sql']
     else:
         response = generated_query['error_message']

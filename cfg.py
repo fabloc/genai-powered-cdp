@@ -29,6 +29,7 @@ inject_one_error = execution_config.getboolean('inject_one_error')
 sql_max_error_retry = execution_config.getint('sql_max_error_retry')
 sql_max_explanation_retry = execution_config.getint('sql_max_explanation_retry')
 auto_add_knowngood_sql = execution_config.getboolean('auto_add_knowngood_sql')
+execute_final_sql = execution_config.getboolean('execute_final_sql')
 
 # Analytics variables
 enable_analytics = analytics_config.getboolean('enable_analytics')
