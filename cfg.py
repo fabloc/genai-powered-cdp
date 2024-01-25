@@ -38,7 +38,8 @@ dataset_location = analytics_config['dataset_location']
 log_table_name = analytics_config['log_table_name']
 
 # ML Models variables
-model_id = models_config['model_id']
+sql_generation_model_id = models_config['sql_generation_model_id']
+validation_model_id = models_config['validation_model_id']
 chat_model_id = models_config['chat_model_id']
 embeddings_model = models_config['embeddings_model']
 

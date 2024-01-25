@@ -1,4 +1,6 @@
 # Common Imports
+from vertexai.preview.generative_models import GenerativeModel
+from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
 from datetime import datetime
 import pandas_gbq
 from sqlalchemy import create_engine
@@ -126,6 +128,7 @@ ORDER BY
 project_id, owner, table_name
 '''
 
+
 def init():
 
   global logger
@@ -134,8 +137,11 @@ def init():
   logger.info("Starting nl2sql module")
 
   #vertexai.init(project=PROJECT_ID, location="us-central1")
-  global model
-  model = createModel(cfg.project_id, "us-central1", cfg.model_id)
+  global sql_generation_model
+  sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.sql_generation_model_id)
+
+  global validation_model
+  validation_model = createModel(cfg.project_id, "us-central1", cfg.validation_model_id)
 
   global chat_model
   chat_model = createModel(cfg.project_id, cfg.region, cfg.chat_model_id)
@@ -157,8 +163,6 @@ def init():
 
 # Initialize Palm Models to be used
 def createModel(PROJECT_ID, REGION, model_id):
-  from vertexai.preview.generative_models import GenerativeModel
-  from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel
 
   if model_id == 'code-bison-32k':
     model = CodeGenerationModel.from_pretrained(model_id)
@@ -168,9 +172,12 @@ def createModel(PROJECT_ID, REGION, model_id):
     model = CodeChatModel.from_pretrained(model_id)
   elif model_id == 'chat-bison-32k':
     model = ChatModel.from_pretrained(model_id)
+  elif model_id == 'text-unicorn':
+    model = TextGenerationModel.from_pretrained(model_id)
   else:
     raise ValueError
   return model
+
 
 def schema_generator(sql):
   formatted_sql = sql.format(**globals(), **locals())
@@ -378,16 +385,28 @@ def build_column_desc(columns_df):
   return aug_columns_df
 
 
-def generate_sql(context_prompt):
-  generated_sql_json = model.generate_content(
-    context_prompt,
-    generation_config={
-      "max_output_tokens": 2048,
-      "temperature": 0,
-      "top_p": 1
-  })
-  generated_sql = generated_sql_json.candidates[0].content.parts[0].text
-  return generated_sql
+def generate_sql(model, context_prompt):
+  if isinstance(model, GenerativeModel):
+    generated_sql_json = model.generate_content(
+      context_prompt,
+      generation_config={
+        "max_output_tokens": 1024,
+        "temperature": 0,
+        "top_p": 1
+    })
+    generated_sql = generated_sql_json.candidates[0].content.parts[0].text
+  elif isinstance(model, TextGenerationModel):
+    parameters = {
+        "candidate_count": 1,
+        "max_output_tokens": 1024,
+        "temperature": 0,
+        "top_k": 40
+    }
+    generated_sql_json = model.predict(
+      context_prompt,
+      **parameters)
+    generated_sql = generated_sql_json.text
+  return chat_session.clean_json(generated_sql)
 
 
 def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
@@ -416,48 +435,57 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  context_query = generate_sql(context_prompt)
+  context_query = generate_sql(sql_generation_model, context_prompt)
 
   return context_query
 
 def sql_explain(question, generated_sql, table_schema):
-  not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
-  response_json = {
-    'sql_explanation': '{ Write the generated explanation, but don\'t deep-dive into the details of the SQL query }',
-    'is_matching': '{Answer with "True" or "False" depending on the outcome of the comparison between generated explanation and the Target Question}',
-    'mismatch_details': '{Write all identified mismatch between generated explanation and the Target Question here. If not, return an empty string}'
-  }
-
-  context_prompt = f"""You are a BigQuery SQL guru. Generate a high-level semantic explanation of a SQL Query and compare it to a Target Question.
-Return the answer as a json object and highlight all the differences identified between the generated explanation and the Target Question.
+  context_prompt = f"""
+You are a BigQuery SQL guru. Generate a high-level question to which the [SQL Query] answers.
 
 Guidelines:
-    - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the columns description.
-    - In the generated explanation, don't deep-dive into the details of the SQL query.
-    - When comparing the generated explanation and the Target Question, be as thorough as possible in spotting difference between the generated explanation and the Target Question.
-    - If one or more conditions is present in the generated explanation and not in the Target Question, then the generated explanation does not match the Target Question.
-    - Remove ```json and ``` from the outputs
-    - Answer using the following json format:
-    {json.dumps(response_json)}
+  - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the column descriptions.
+  - In the generated question, stay as concise as possible while not missing any filtering and time range specified by the [SQL query].
+  - In the generated question, if no time range is specified for a specific filter, consider that it is global, or total.
 
-Tables Schema:
+[Tables Schema]:
 {table_schema}
 
-SQL Query:
+[SQL Query]:
 {generated_sql}
-
-Target Question:
-{question}
 """
 
-  logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
+  logger.debug('Validation - Question Generation from SQL Prompt: \n' + context_prompt)
 
-  context_query = json.loads(generate_sql(context_prompt))
+  generated_question = generate_sql(validation_model, context_prompt)
 
-  if context_query['is_matching'] == 'true':
-    context_query['is_matching'] = True
+  response_json = {
+    "is_matching": "{Answer with 'True' or 'False' depending on the outcome of the comparison between the provided Question and the Reference Question}",
+    "mismatch_details": "{Write all identified missing filters from [Question]. If not, return an empty string}"
+  }
 
-  return context_query
+  context_prompt = f"""
+Compare a Query to a Reference Question and assess whether they are equivalent or not.
+
+[Guidelines]:
+- Answer using the following json format:
+{response_json}
+- Remove ```json prefix and ``` suffix from the outputs.
+- Use double quotes "" for json property names and values in the returned json object.
+
+[Reference Question]:
+{question}
+
+[Query]:
+{generated_question}
+"""
+
+  logger.debug('Validation - Question Comparison Prompt: \n' + context_prompt)
+
+  validation_json = json.loads(generate_sql(validation_model, context_prompt))
+  validation_json['generated_question'] = generated_question
+
+  return validation_json
 
 
 def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, failure_step, error_msg):
@@ -572,7 +600,8 @@ def call_gen_sql(question):
     'error_retry_max_count': cfg.sql_max_error_retry,
     'explanation_retry_max_count': cfg.sql_max_explanation_retry,
     'error_retry_count': 0,
-    'explanation_retry_count': 0
+    'explanation_retry_count': 0,
+    'skip_final_dry_run': False
   }
 
   status = {
@@ -649,7 +678,7 @@ def call_gen_sql(question):
       while workflow['stop_loop'] is False:
 
         # Execute SQL test plan and semantic validation in parallel in order to minimize overall query generation time
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
           future_test_plan = executor.submit(test_sql_plan_execution, generated_sql)
           future_sql_validation = executor.submit(sql_explain, question, generated_sql, table_result_joined)
           status['bq_status'] = future_test_plan.result()
@@ -658,6 +687,11 @@ def call_gen_sql(question):
         if status['bq_status']['status'] == 'Success':
 
           status['sql_generation_success'] = True
+          if sql_explanation['is_matching'] == 'True':
+            status['sql_validation_success'] = True
+            workflow['skip_final_dry_run'] = True
+          else:
+            status['sql_validation_success'] = False       
           workflow['stop_loop'] = True
 
         else:  # Failure on BigQuery SQL execution
@@ -671,7 +705,7 @@ def call_gen_sql(question):
               'explain_plan_validation',
               status['bq_status']['error_message'] )
             ### Need to call retry
-            if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(model)
+            if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(sql_generation_model)
             rewrite_result = error_correction_chat_session.get_chat_response(
               question,
               generated_sql,
@@ -715,17 +749,17 @@ def call_gen_sql(question):
         
           logger.info("Rewriting SQL request to address previous generated SQL semantic issues...")
 
-          if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(model)
+          if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(sql_generation_model)
 
           generated_sql = explanation_correction_chat_session.get_chat_response(
             table_result_joined,
             similar_questions_return,
             question,
             generated_sql,
-            sql_explanation['sql_explanation'],
+            sql_explanation['generated_question'],
             sql_explanation['mismatch_details'])
           
-          logger.info("New SQL request generated: +\n" + generated_sql)
+          logger.info("New SQL request generated")
 
           # Check whether the generated query actually answers the initial question by invoking GenAI
           # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
@@ -742,25 +776,26 @@ def call_gen_sql(question):
             workflow['stop_loop'] = True
 
         if status['sql_validation_success'] is True:
-          # Final validation by executing a dry-run on BigQuery
+         
+          # IF required, final validation of the rewritten query by executing a dry-run on BigQuery
+          if workflow['skip_final_dry_run'] is False:
+            logger.info('Executing BigQuery dry-run for the validated rewritten SQL Query, only if the initial validation failed...')
+            status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=True)
 
-          logger.info('Executing BigQuery dry-run for the validated rewritten SQL Query.')
-          status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=True)
-
-          if status['bq_status']['status'] == 'Success':
-            logger.info('BigQuery dry-run successfully completed for rewritten SQL Query.')
-          else:
-            logger.error('BigQuery dry-run failed for the rewritten SQL Query. Can\'t answer user query.')
-            status['status'] = 'Error'
-            status['sql_validation_success'] = False
-            status['error_message'] = status['bq_status']['error_message']
+            if status['bq_status']['status'] == 'Success':
+              logger.info('BigQuery dry-run successfully completed for rewritten SQL Query.')
+            else:
+              logger.error('BigQuery dry-run failed for the rewritten SQL Query. Can\'t answer user query.')
+              status['status'] = 'Error'
+              status['sql_validation_success'] = False
+              status['error_message'] = status['bq_status']['error_message']
 
         else:
           logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
           status['status'] = 'Error'
           status['error_message'] = sql_explanation['mismatch_details']
 
-        appen_2_bq_result = append_2_bq(cfg.model_id, question, generated_sql, 'N', 'N', '', '')
+        #appen_2_bq_result = append_2_bq(cfg.validation_model_id, question, generated_sql, 'N', 'N', '', '')
 
 
       if status['sql_validation_success'] is True:
