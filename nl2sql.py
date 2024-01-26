@@ -1,62 +1,14 @@
 # Common Imports
 from vertexai.preview.generative_models import GenerativeModel
 from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
-from datetime import datetime
 import pandas_gbq
-from sqlalchemy import create_engine
-from sqlalchemy import text
-import pandas as pd
-from google.cloud import bigquery
-from google.cloud.exceptions import NotFound
-from logging import exception
 import pgvector_handler
-import os, logging, json, time, re, yaml
+import os, logging, json, time, yaml
+from json import JSONDecodeError
 import cfg
 import chat_session
+import bigquery_handler
 import concurrent.futures
-
-
-class UserSession:
-  
-  user_history = []
-
-  def __init__(self, prompt_init):
-    context_prompt = {
-      'role': 'user',
-      'parts': [prompt_init]
-    }
-    self.user_history.append(context_prompt)
-
-  def add_user_question(self, question):
-    message = {
-      'role': 'user',
-      'parts': [question]
-    }
-    self.user_history.append(message)
-  
-  def add_model_answer(self, answer):
-    message = {
-      'role': 'model',
-      'parts': [answer]
-    }
-    self.user_history.append(message)
-    
-  def get_messages(self):
-    return self.history
-  
-  def reset_history(self):
-    self.history = []
-
-class BigQueryError(Exception):
-  # Constructor or Initializer
-  def __init__(self, type, code, message):
-      self.type = type
-      self.code = code
-      self.message = message
-
-  # __str__ is to print() the value
-  def __str__(self):
-      return("BigQuery Error with type: " + self.type + ", code: " + self.code + ", and message: " + self.message)
 
 # Define BigQuery Dictionary Queries and Helper Functions
 
@@ -146,18 +98,6 @@ def init():
   global chat_model
   chat_model = createModel(cfg.project_id, cfg.region, cfg.chat_model_id)
 
-  # Enable NL2SQL Analytics Warehouse
-  if cfg.enable_analytics is True:
-      # Create a BigQuery client
-      bq_client = bigquery.Client(location=cfg.dataset_location, project=cfg.project_id)
-
-      # Create a dataset
-      try:
-        dataset = bq_client.create_dataset(dataset=cfg.dataset_name)
-      except Exception as e:
-        logger.error('Failed to create the dataset\n')
-        logger.error(str(e))
-
   if cfg.update_db_at_startup is True:
     init_table_and_columns_desc()
 
@@ -234,13 +174,6 @@ def insert_sample_queries_lookup(tables_list):
   return queries_samples
 
 
-def serialized_detailed_description(df):
-    detailed_desc = ''
-    for index, row in df.iterrows():
-        detailed_desc = detailed_desc + str(row['detailed_description']) + '\n'
-    return detailed_desc
-
-
 def init_table_and_columns_desc():
   
     table_comments_df= schema_generator(get_table_comments_sql)
@@ -272,9 +205,6 @@ def init_table_and_columns_desc():
       table_comments_df = add_table_comments(columns_df, pkeys_df, fkeys_df, table_comments_df)
 
       table_comments_df = build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df)
-
-      # Dump the table description
-      table_desc = serialized_detailed_description(table_comments_df)
 
       pgvector_handler.add_table_desc_2_pgvector(table_comments_df)
 
@@ -353,43 +283,6 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
 
 # Build a custom "detailed_description" in the columns dataframe. This will be indexed by the Vector DB
 # Augment columns dataframe with detailed description. This detailed description column will be the one used as the document when adding the record to the VectorDB
-
-def build_column_desc(columns_df):
-  aug_columns_df = columns_df
-
-  #self.logger.info(len(aug_columns_df))
-  #self.logger.info(len(columns_df))
-
-  cur_table_name = ""
-  cur_table_owner = ""
-  cur_full_table= cur_table_owner + '.' + cur_table_name
-
-  for index_aug, row_aug in aug_columns_df.iterrows():
-
-    cur_table_name = str(row_aug['table_name'])
-    cur_table_owner = str(row_aug['owner'])
-    cur_full_table= cur_table_owner + '.' + cur_table_name
-    curr_col_name = str(row_aug['column_name'])
-
-    #self.logger.info('\n' + cur_table_owner + '.' + cur_table_name + ':')
-
-    col_comments_text=f"""
-        Column Name: {row_aug['column_name']} |
-        Sample values: {row_aug['sample_values']} |
-        Data type: {row_aug['data_type']} |
-        Table Name: {row_aug['table_name']} |
-        Table Owner: {row_aug['owner']} |
-        Project_id: {row_aug['project_id']}
-    """
-        #Low value: {row_aug['low_value']} |
-        #High value: {row_aug['high_value']} |
-        #Description: {row_aug['column_description']} |
-        #User commments: {row_aug['column_comments']}
-
-    logger.info(' Column ' + cur_full_table + '.' + curr_col_name + " Description: " + col_comments_text)
-
-    aug_columns_df.at[index_aug, 'detailed_description'] = col_comments_text
-  return aug_columns_df
 
 
 def generate_sql(model, context_prompt):
@@ -491,101 +384,25 @@ Compare a Query to a Reference Question and assess whether they are equivalent o
 
   logger.debug('Validation - Question Comparison Prompt: \n' + context_prompt)
 
-  validation_json = json.loads(generate_sql(validation_model, context_prompt))
+  try:
+
+    sql_explanation = generate_sql(validation_model, context_prompt)
+    logger.info("Validation status: \n" + sql_explanation)
+    validation_json = json.loads(sql_explanation, strict=False)
+
+  except JSONDecodeError as e:
+    logger.error("Error while deconding JSON response:: " + str(e))
+    sql_explanation['is_matching'] = 'False'
+    sql_explanation['mismatch_details'] = 'Returned JSON malformed'
+  except Exception as e:
+    logger.error("Exception: " + str(e))
+    sql_explanation['is_matching'] = 'False'
+    sql_explanation['mismatch_details'] = 'Undefined error. Retry'
+
+
   validation_json['generated_question'] = generated_question
 
   return validation_json
-
-
-def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, failure_step, error_msg):
-
-  if cfg.enable_analytics is True:
-      logger.debug('\nInside the Append to BQ block\n')
-      table_id=cfg.project_id + '.' + cfg.dataset_name + '.' + cfg.log_table_name
-      now = datetime.now()
-
-      table_exists=False
-      client = bigquery.Client()
-
-      df1 = pd.DataFrame(columns=[
-          'source_type',
-          'project_id',
-          'user',
-          'schema',
-          'model_used',
-          'question',
-          'generated_sql',
-          'found_in_vector',
-          'need_rewrite',
-          'failure_step',
-          'error_msg',
-          'execution_time'
-          ])
-
-      new_row = {
-          "source_type":cfg.source_type,
-          "project_id":str(cfg.project_id),
-          "user":str(cfg.auth_user),
-          "schema": cfg.schema,
-          "model_used": model,
-          "question": question,
-          "generated_sql": generated_sql,
-          "found_in_vector":found_in_vector,
-          "need_rewrite":need_rewrite,
-          "failure_step":failure_step,
-          "error_msg":error_msg,
-          "execution_time": now
-        }
-
-      df1.loc[len(df1)] = new_row
-
-      db_schema=[
-            # Specify the type of columns whose type cannot be auto-detected. For
-            # example the "title" column uses pandas dtype "object", so its
-            # data type is ambiguous.
-            bigquery.SchemaField("source_type", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("project_id", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("user", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("schema", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("model_used", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("question", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("generated_sql", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("found_in_vector", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("need_rewrite", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("failure_step", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("error_msg", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("execution_time", bigquery.enums.SqlTypeNames.TIMESTAMP),
-            bigquery.SchemaField("full_log", bigquery.enums.SqlTypeNames.STRING),
-          ]
-
-      try:
-        client.get_table(table_id)  # Make an API request.
-        #llogger.info("Table {} already exists.".format(table_id))
-        table_exists=True
-      except NotFound:
-          logger.error("Table {} is not found.".format(table_id))
-          table_exists=False
-
-      if table_exists is True:
-          logger.info('Performing streaming insert')
-          errors = client.insert_rows_from_dataframe(table=table_id, dataframe=df1, selected_fields=db_schema)  # Make an API request.
-          #if errors == []:
-          #    print("New rows have been added.")
-          #else:
-          #    print("Encountered errors while inserting rows: {}".format(errors))
-      else:
-          pandas_gbq.to_gbq(df1, table_id, project_id=cfg.project_id)  # replace to replace table; append to append to a table
-
-
-      # df1.loc[len(df1)] = new_row
-      # pandas_gbq.to_gbq(df1, table_id, project_id=PROJECT_ID, if_exists='append')  # replace to replace table; append to append to a table
-      logger.info('Query added to BQ log table')
-      return 'Row added'
-  else:
-    logger.info('BQ Analytics is disabled so query was not added to BQ log table')
-
-    return 'BQ Analytics is disabled'
-
 
 
 def call_gen_sql(question):
@@ -684,10 +501,11 @@ def call_gen_sql(question):
     while workflow['stop_loop'] is False:
 
       # Execute SQL test plan and semantic validation in parallel in order to minimize overall query generation time
+      logger.info("Executing SQL test plan and SQL query semantic validation in parallel...")
       with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future_test_plan = executor.submit(test_sql_plan_execution, generated_sql)
+        future_test_plan = executor.submit(bigquery_handler.execute_bq_query, generated_sql, dry_run=True)
         future_sql_validation = executor.submit(sql_explain, question, generated_sql, table_result_joined)
-        status['bq_status'] = future_test_plan.result()
+        status['bq_status'],_ = future_test_plan.result()
         sql_explanation = future_sql_validation.result()
 
       if status['bq_status']['status'] == 'Success':
@@ -701,9 +519,8 @@ def call_gen_sql(question):
 
       else:  # Failure on BigQuery SQL execution
           
-          logger.info("Error during SQL execution")
           logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(workflow['error_retry_count']))
-          append_2_bq_result = append_2_bq(
+          append_2_bq_result = bigquery_handler.append_2_bq(
             cfg.sql_generation_model_id,
             question,
             generated_sql, 'N', 'Y',
@@ -717,7 +534,6 @@ def call_gen_sql(question):
             table_result_joined,
             status['bq_status']['error_message'],
             similar_questions_return)
-          logger.info('\n Rewritten SQL:\n' + rewrite_result)
           generated_sql=rewrite_result
 
       if workflow['stop_loop'] is not True:
@@ -739,7 +555,7 @@ def call_gen_sql(question):
         logger.info('Question cannot be answered using this dataset!')
         status['sql_generation_success'] = False
         status['error_message'] = 'Question cannot be answered using the configured datasets'
-        append_2_bq_result = append_2_bq(
+        append_2_bq_result = bigquery_handler.append_2_bq(
           cfg.model_id,
           question,
           'Question cannot be answered using this dataset!',
@@ -779,7 +595,7 @@ def call_gen_sql(question):
         
           # IF required, final validation of the rewritten query by executing a dry-run on BigQuery
           logger.info('Executing BigQuery dry-run for the validated rewritten SQL Query, only if the initial validation failed...')
-          status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=True)
+          status['bq_status'], sql_result_df = bigquery_handler.execute_bq_query(generated_sql, dry_run=True)
 
           if status['bq_status']['status'] == 'Success':
             workflow['stop_loop'] = True
@@ -802,7 +618,7 @@ def call_gen_sql(question):
       if cfg.execute_final_sql:
         # Query is valid, now executing it against BigQuery
         logger.info('Executing generated and validated SQL on BigQuery')
-        status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=False)
+        status['bq_status'], sql_result_df = bigquery_handler.execute_bq_query(generated_sql, dry_run=False)
 
         if status['bq_status']['status'] == 'Success':
           logger.info('BigQuery execution successfully completed.')
@@ -838,7 +654,7 @@ def call_gen_sql(question):
     logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
     generated_sql = search_sql_vector_by_id_return
     if cfg.execute_final_sql is True:
-        bq_status, final_exec_result_df = execute_bq_query(search_sql_vector_by_id_return, dry_run=False)
+        bq_status, final_exec_result_df = bigquery_handler.execute_bq_query(search_sql_vector_by_id_return, dry_run=False)
 
         #TODO Check BQ response status
         sql_result_df = final_exec_result_df
@@ -848,13 +664,16 @@ def call_gen_sql(question):
     else:  # Do not execute final SQL
         logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False")
     logger.info('will call append to bq next')
-    appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
+    appen_2_bq_result = bigquery_handler.append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
     status['status'] = 'Success'
 
   if sql_result_df is not None:
     if 'hll_user_aggregates' in matched_tables:
-      sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
+      if sql_result_df.empty is not True:
+        sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
+      else:
+        sql_result_str = "No users matches the question :("
       is_audience_result = True
     else:
       sql_result_str = sql_result_df.to_html()
@@ -881,181 +700,3 @@ def call_gen_sql(question):
   logger.info("Generated object: \n" + str(response))
 
   return response
-
-def test_sql_plan_execution(generated_sql):
-  from google.cloud import bigquery
-
-  # Set the initial backoff time to 1 second.
-  backoff_time = 1
-
-  # Set the maximum number of retries to 5.
-  max_retries = 5
-
-  # Create a counter to track the number of retries.
-  retry_count = 0
-
-  run_dataset = cfg.dataproject_id + '.' + cfg.dataset_name
-  df=pd.DataFrame()
-
-  bq_status = {
-    'status': 'Success',
-    'error_type': None,
-    'error_code': None,
-    'error_message': None,
-    'execution_time': -1
-  }
-
-  # Construct a BigQuery client object.
-  client = bigquery.Client(project=cfg.dataproject_id)
-
-  job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
-
-  while retry_count < max_retries:
-    try:
-
-      # Start the query, passing in the extra configuration.
-      query_job = client.query(
-        (generated_sql),
-        job_config=job_config,
-      )  # Make an API request.
-
-      # A dry run query completes immediately.
-      print("This query will process {} bytes.".format(query_job.total_bytes_processed))
-      bq_status['status'] = 'Success'
-      return bq_status
-    
-    except Exception as e:
-      # If the query fails, check the error code.
-      error_code = e.response.status_code
-
-      error_message = e.errors[0]['message']
-
-      # If the error code is 500 or 503, retry the query.
-      if error_code == 500 or error_code == 503:
-        # Increase the backoff time.
-        backoff_time *= 2
-
-        # Sleep for the backoff time.
-        time.sleep(backoff_time)
-
-        # Increment the retry count.
-        retry_count += 1
-
-      # If the error code is not 500 or 503, raise the exception.
-      elif error_code == 403 or error_code == 409:
-        bq_status['status'] = 'Error'
-        bq_status['error_type'] = 'Permission Error'
-        bq_status['error_code'] = error_code
-        bq_status['error_message'] = error_message
-        return bq_status,None
-      elif error_code == 400 or error_code == 404:
-        bq_status['status'] = 'Error'
-        bq_status['error_type'] = 'Bad SQL Query'
-        bq_status['error_code'] = error_code
-        bq_status['error_message'] = error_message
-        return bq_status
-      else:
-        bq_status['status'] = 'Error'
-        bq_status['error_type'] = 'Undefined BigQuery Error'
-        bq_status['error_code'] = error_code
-        bq_status['error_message'] = error_message
-        return bq_status
-    finally:
-      # Set the duration time. If there is a retry, the new trial will erase the previous duration value.
-      # The end duration that will be returned will take into account all trials.
-      # Given it is in the 'finally' part of the code, it will be executed before returning to the calling function
-      print("SQL execution complete")
-
-  # If the query is still failing after the maximum number of retries, raise an exception.
-  bq_status['status'] = 'Error'
-  bq_status['error_type'] = 'BigQuery Internal Error'
-  bq_status['error_message'] = 'Maximum number of retries reached.'
-  return bq_status
-
-
-def execute_bq_query(generated_sql, dry_run: bool = True):
-# Executes the given SQL query using the pandas_gbq library.
-
-  # Set the initial backoff time to 1 second.
-  backoff_time = 1
-
-  # Set the maximum number of retries to 5.
-  max_retries = 5
-
-  # Create a counter to track the number of retries.
-  retry_count = 0
-
-  bq_status = {
-    'status': 'Success',
-    'error_type': None,
-    'error_code': None,
-    'error_message': None,
-    'execution_time': -1
-  }
-
-  start_time = time.time()
-  logger.info('Executing SQL query...')
-
-  while retry_count < max_retries:
-    try:
-      # Execute the SQL query.
-      df = pandas_gbq.read_gbq(generated_sql, project_id=cfg.project_id)
-
-      bq_status['status'] = 'Success'
-      logger.info('Query execution success...')
-  
-      # If the query is successful, return the results.
-      return bq_status,df
-
-    except Exception as err:
-      
-      # If the query fails, check the error code.
-      error_code_pattern = re.compile('Reason: (\d+)')
-      error_message_raw = err.args[0]
-      match = error_code_pattern.findall(error_message_raw)
-
-      error_code = int(match[0])
-      error_message = error_message_raw.split('\n\nLocation')[0]
-
-      # If the error code is 500 or 503, retry the query.
-      if error_code == 500 or error_code == 503:
-        # Increase the backoff time.
-        backoff_time *= 2
-
-        # Sleep for the backoff time.
-        time.sleep(backoff_time)
-
-        # Increment the retry count.
-        retry_count += 1
-
-      # If the error code is not 500 or 503, raise the exception.
-      elif error_code == 403 or error_code == 409:
-        bq_status['status'] = 'Error'
-        bq_status['error_type'] = 'Permission Error'
-        bq_status['error_code'] = error_code
-        bq_status['error_message'] = error_message
-        return bq_status,None
-      elif error_code == 400 or error_code == 404:
-        bq_status['status'] = 'Error'
-        bq_status['error_type'] = 'Bad SQL Query'
-        bq_status['error_code'] = error_code
-        bq_status['error_message'] = error_message
-        return bq_status,None
-      else:
-        bq_status['status'] = 'Error'
-        bq_status['error_type'] = 'Undefined BigQuery Error'
-        bq_status['error_code'] = error_code
-        bq_status['error_message'] = error_message_raw
-        return bq_status,None
-    finally:
-      # Set the duration time. If there is a retry, the new trial will erase the previous duration value.
-      # The end duration that will be returned will take into account all trials.
-      # Given it is in the 'finally' part of the code, it will be executed before returning to the calling function
-      bq_status['execution_time'] = time.time() - start_time
-      logger.info("SQL execution complete")
-
-  # If the query is still failing after the maximum number of retries, raise an exception.
-  bq_status['status'] = 'Error'
-  bq_status['error_type'] = 'BigQuery Internal Error'
-  bq_status['error_message'] = 'Maximum number of retries reached.'
-  return bq_status,None
