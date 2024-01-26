@@ -305,10 +305,14 @@ def search_sql_nearest_vector(schema, question, question_text_embedding, valid):
         msg=''
         logger.info('No record near the query was found in the Vector DB.')
 
+    query_examples = []
     for r in results:
-        msg= msg + '\nQuestion:' + r[1] + '\n' + 'Generated SQL:' + r[2] + '\n'
+        query_examples.append({
+            "question": r[1],
+            "sql_query": r[2]
+        })
 
-    return msg
+    return query_examples
 
 
 # question="Display the employee name and city when employee ID is 103."

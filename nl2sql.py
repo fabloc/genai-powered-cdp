@@ -10,7 +10,7 @@ from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from logging import exception
 import pgvector_handler
-import os, logging, json, time, re
+import os, logging, json, time, re, yaml
 import cfg
 import chat_session
 import concurrent.futures
@@ -215,15 +215,22 @@ def get_tables(df):
 def insert_sample_queries_lookup(tables_list):
   queries_samples = []
   for table_name in tables_list:
-    samples_filename = 'queries_samples/' + table_name + '.json'
+    samples_filename = 'queries_samples/' + table_name + '.yaml'
     if os.path.exists(samples_filename):
-      queries_str = open(samples_filename)
-      table_queries_samples = json.load(queries_str)
-      queries_samples.append(table_queries_samples)
-      for sql_query in queries_samples[0]:
-        question = sql_query['question']
-        question_text_embedding = pgvector_handler.text_embedding(question)
-        pgvector_handler.add_vector_sql_collection(cfg.schema, sql_query['question'], sql_query['sql_query'], question_text_embedding, 'Y')
+      with open(samples_filename) as stream:
+        try:
+          table_queries_samples = yaml.safe_load(stream)
+          queries_samples.append(table_queries_samples)
+          for sql_query in queries_samples[0]:
+            question = sql_query['Question']
+            question_text_embedding = pgvector_handler.text_embedding(question)
+            pgvector_handler.add_vector_sql_collection(cfg.schema, sql_query['Question'], sql_query['SQL Query'], question_text_embedding, 'Y')
+        except yaml.YAMLError as exc:
+          logger.error("Error loading YAML file containing sample questions: " + exc)
+          logger.error("Skipping sample ingestion")
+        finally:
+          stream.close()
+
   return queries_samples
 
 
@@ -410,23 +417,25 @@ def generate_sql(model, context_prompt):
 
 
 def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
+
+  similar_questions_str = chat_session.question_to_query_examples(similar_questions)
+
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   context_prompt = f"""
+You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the following question while using the provided context to correctly refer to the BigQuery tables and the needed column names.
 
-    You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the following question while using the provided context to correctly refer to the BigQuery tables and the needed column names.
+Guidelines:
+{cfg.prompt_guidelines}
 
-    Guidelines:
-    {cfg.prompt_guidelines}
+Tables Schema:
+{table_result_joined}
 
-    Tables Schema:
-    {table_result_joined}
+{similar_questions_str}
 
-    {similar_questions}
+[Question]:
+{question}
 
-    Question:
-    {question}
-
-    SQL Generated:
+[SQL Generated]:
 
     """
 
@@ -460,8 +469,8 @@ Guidelines:
   generated_question = generate_sql(validation_model, context_prompt)
 
   response_json = {
-    "is_matching": "{Answer with 'True' or 'False' depending on the outcome of the comparison between the provided Question and the Reference Question}",
-    "mismatch_details": "{Write all identified missing filters from [Question]. If not, return an empty string}"
+    "is_matching": "{Answer with 'True' or 'False' depending on the outcome of the comparison between the provided Query and the Reference Question}",
+    "mismatch_details": "{Write all identified missing or incorrect filters from the Query. If not, return an empty string. Be specific when highlighting a difference}"
   }
 
   context_prompt = f"""
@@ -600,8 +609,7 @@ def call_gen_sql(question):
     'error_retry_max_count': cfg.sql_max_error_retry,
     'explanation_retry_max_count': cfg.sql_max_explanation_retry,
     'error_retry_count': 0,
-    'explanation_retry_count': 0,
-    'skip_final_dry_run': False
+    'explanation_retry_count': 0
   }
 
   status = {
@@ -629,257 +637,250 @@ def call_gen_sql(question):
 
   # search_sql_vector_by_id_return = "SQL Not Found in Vector DB"
 
-  try:
+  if search_sql_vector_by_id_return == 'SQL Not Found in Vector DB':   ### Only go thru the loop if hash of the question is not found in Vector.
 
-    if search_sql_vector_by_id_return == 'SQL Not Found in Vector DB':   ### Only go thru the loop if hash of the question is not found in Vector.
+    logger.info("Did not find same question in DB")
+    logger.info("Searching for similar questions in DB...")
+    start_time = time.time()
+    # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
+    similar_questions_return = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
+    metrics['similar_questions_duration'] = time.time() - start_time
+    logger.info("Found similar questions:\n" + str(similar_questions_return))
 
-      logger.info("Did not find same question in DB")
-      logger.info("Searching for similar questions in DB...")
-      start_time = time.time()
-      # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
-      similar_questions_return = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
-      metrics['similar_questions_duration'] = time.time() - start_time
-      logger.info("Found similar questions:\n" + str(similar_questions_return))
+    error_correction_chat_session=None
+    explanation_correction_chat_session=None
+    logger.info("Now looking for appropriate tables in Vector to answer the question...")
+    start_time = time.time()
+    table_result_joined = pgvector_handler.get_tables_colums_vector(question, question_text_embedding)
+    metrics['table_matching_duration'] = time.time() - start_time
 
-      error_correction_chat_session=None
-      explanation_correction_chat_session=None
-      logger.info("Now looking for appropriate tables in Vector to answer the question...")
-      start_time = time.time()
-      table_result_joined = pgvector_handler.get_tables_colums_vector(question, question_text_embedding)
-      metrics['table_matching_duration'] = time.time() - start_time
+    if len(table_result_joined) > 0 :
+        logger.info("Found matching tables")
 
-      if len(table_result_joined) > 0 :
-          logger.info("Found matching tables")
+        # Add matched table to list of tables used during the SQL generation
+        for table in cfg.tables:
+          if table in table_result_joined:
+            matched_tables.append(table)
 
-          # Add matched table to list of tables used during the SQL generation
-          for table in cfg.tables:
-            if table in table_result_joined:
-              matched_tables.append(table)
-
-          start_time = time.time()
-          logger.info("Generating SQL query using LLM...")
-          generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
-          logger.info("SQL query generated:\n" + generated_sql)
-          metrics['sql_generation_duration'] = time.time() - start_time
-          if 'unrelated_answer' in generated_sql :
-            workflow['stop_loop']=True
-            #logger.info('Inside if statement to check for unrelated question...')
-            workflow['unrelated_question']=True
-          if cfg.inject_one_error is True:
-            if workflow['error_retry_count'] < 1:
-              logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
-              generated_sql=generated_sql + ' ROWID'
-      else:
+        start_time = time.time()
+        logger.info("Generating SQL query using LLM...")
+        generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
+        logger.info("SQL query generated:\n" + generated_sql)
+        metrics['sql_generation_duration'] = time.time() - start_time
+        if 'unrelated_answer' in generated_sql :
           workflow['stop_loop']=True
+          #logger.info('Inside if statement to check for unrelated question...')
           workflow['unrelated_question']=True
-          status['sql_generation_success'] = False
-          logger.info('No ANN/appropriate tables found in Vector to answer the question. Stopping...')
+        if cfg.inject_one_error is True:
+          if workflow['error_retry_count'] < 1:
+            logger.info('Injecting error on purpose to test code ... Adding ROWID at the end of the string')
+            generated_sql=generated_sql + ' ROWID'
+    else:
+        workflow['stop_loop']=True
+        workflow['unrelated_question']=True
+        status['sql_generation_success'] = False
+        logger.info('No ANN/appropriate tables found in Vector to answer the question. Stopping...')
 
-      while workflow['stop_loop'] is False:
+    while workflow['stop_loop'] is False:
 
-        # Execute SQL test plan and semantic validation in parallel in order to minimize overall query generation time
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-          future_test_plan = executor.submit(test_sql_plan_execution, generated_sql)
-          future_sql_validation = executor.submit(sql_explain, question, generated_sql, table_result_joined)
-          status['bq_status'] = future_test_plan.result()
-          sql_explanation = future_sql_validation.result()
+      # Execute SQL test plan and semantic validation in parallel in order to minimize overall query generation time
+      with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        future_test_plan = executor.submit(test_sql_plan_execution, generated_sql)
+        future_sql_validation = executor.submit(sql_explain, question, generated_sql, table_result_joined)
+        status['bq_status'] = future_test_plan.result()
+        sql_explanation = future_sql_validation.result()
 
-        if status['bq_status']['status'] == 'Success':
+      if status['bq_status']['status'] == 'Success':
 
-          status['sql_generation_success'] = True
-          if sql_explanation['is_matching'] == 'True':
-            status['sql_validation_success'] = True
-            workflow['skip_final_dry_run'] = True
-          else:
-            status['sql_validation_success'] = False       
-          workflow['stop_loop'] = True
+        status['sql_generation_success'] = True
+        if sql_explanation['is_matching'] == 'True':
+          status['sql_validation_success'] = True
+        else:
+          status['sql_validation_success'] = False       
+        workflow['stop_loop'] = True
 
-        else:  # Failure on BigQuery SQL execution
-            
-            logger.info("Error during SQL execution")
-            logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(workflow['error_retry_count']))
-            append_2_bq_result = append_2_bq(
-              cfg.model_id,
-              question,
-              generated_sql, 'N', 'Y',
-              'explain_plan_validation',
-              status['bq_status']['error_message'] )
-            ### Need to call retry
-            if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(sql_generation_model)
-            rewrite_result = error_correction_chat_session.get_chat_response(
-              question,
-              generated_sql,
-              table_result_joined,
-              status['bq_status']['error_message'],
-              similar_questions_return)
-            logger.info('\n Rewritten SQL:\n' + rewrite_result)
-            generated_sql=rewrite_result
-
-        if workflow['stop_loop'] is not True:
-          workflow['error_retry_count'] += 1
-          if workflow['error_retry_count'] > workflow['error_retry_max_count']:
-            workflow['stop_loop'] = True
-            status['error_message'] = 'Question cannot be answered using the configured datasets'
-
-      # After the loop, check whether is successfully generated a valid SQL query or not
-      if status['sql_generation_success'] is False:
-
-        # If the generation was unsuccessful, set the status flags accordingly
-        if workflow['error_retry_count'] > workflow['error_retry_max_count']:
-          logger.info('Oopss!!! Could not find a valid SQL. This is the best I came up with !!!!!\n' + generated_sql)
-          workflow['sql_generation_success'] = False
-
-        # If query is unrelated to the dataset
-        if status['unrelated_question'] is True:
-          logger.info('Question cannot be answered using this dataset!')
-          status['sql_generation_success'] = False
-          status['error_message'] = 'Question cannot be answered using the configured datasets'
+      else:  # Failure on BigQuery SQL execution
+          
+          logger.info("Error during SQL execution")
+          logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(workflow['error_retry_count']))
           append_2_bq_result = append_2_bq(
-            cfg.model_id,
+            cfg.sql_generation_model_id,
             question,
-            'Question cannot be answered using this dataset!',
-            'N', 'N', 'unrelated_question', '')
-      
-      # If SQL query was successfully generated and tested on BigQuery, proceed with query validation
-      else:
-
-        workflow['stop_loop'] = status['sql_validation_success']
-
-        while workflow['stop_loop'] is False:
-        
-          logger.info("Rewriting SQL request to address previous generated SQL semantic issues...")
-
-          if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(sql_generation_model)
-
-          generated_sql = explanation_correction_chat_session.get_chat_response(
-            table_result_joined,
-            similar_questions_return,
+            generated_sql, 'N', 'Y',
+            'explain_plan_validation',
+            status['bq_status']['error_message'] )
+          ### Need to call retry
+          if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(sql_generation_model)
+          rewrite_result = error_correction_chat_session.get_chat_response(
             question,
             generated_sql,
-            sql_explanation['generated_question'],
-            sql_explanation['mismatch_details'])
-          
-          logger.info("New SQL request generated")
+            table_result_joined,
+            status['bq_status']['error_message'],
+            similar_questions_return)
+          logger.info('\n Rewritten SQL:\n' + rewrite_result)
+          generated_sql=rewrite_result
 
-          # Check whether the generated query actually answers the initial question by invoking GenAI
-          # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
-          logger.info("Check whether the rewritten SQL query now matches the original question...")
-          sql_explanation = sql_explain(question, generated_sql, table_result_joined)
-          logger.debug('Generated SQL explanation: ' + json.dumps(sql_explanation))
-          if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
-            logger.info("Generated SQL explanation matches initial question.")
-            status['sql_validation_success'] = True
-            workflow['stop_loop'] = True
+      if workflow['stop_loop'] is not True:
+        workflow['error_retry_count'] += 1
+        if workflow['error_retry_count'] > workflow['error_retry_max_count']:
+          workflow['stop_loop'] = True
+          status['error_message'] = 'Question cannot be answered using the configured datasets'
 
-          workflow['explanation_retry_count'] += 1
-          if workflow['explanation_retry_count'] > workflow['explanation_retry_max_count']:
-            workflow['stop_loop'] = True
+    # After the loop, check whether is successfully generated a valid SQL query or not
+    if status['sql_generation_success'] is False:
+
+      # If the generation was unsuccessful, set the status flags accordingly
+      if workflow['error_retry_count'] > workflow['error_retry_max_count']:
+        logger.info('Oopss!!! Could not find a valid SQL. This is the best I came up with !!!!!\n' + generated_sql)
+        workflow['sql_generation_success'] = False
+
+      # If query is unrelated to the dataset
+      if status['unrelated_question'] is True:
+        logger.info('Question cannot be answered using this dataset!')
+        status['sql_generation_success'] = False
+        status['error_message'] = 'Question cannot be answered using the configured datasets'
+        append_2_bq_result = append_2_bq(
+          cfg.model_id,
+          question,
+          'Question cannot be answered using this dataset!',
+          'N', 'N', 'unrelated_question', '')
+    
+    # If SQL query was successfully generated and tested on BigQuery, proceed with query validation
+    else:
+
+      workflow['stop_loop'] = status['sql_validation_success']
+
+      while workflow['stop_loop'] is False:
+      
+        logger.info("Rewriting SQL request to address previous generated SQL semantic issues...")
+
+        if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(sql_generation_model)
+
+        generated_sql = explanation_correction_chat_session.get_chat_response(
+          table_result_joined,
+          similar_questions_return,
+          question,
+          generated_sql,
+          sql_explanation['generated_question'],
+          sql_explanation['mismatch_details'])
+        
+        logger.info("New SQL request generated")
+
+        # Check whether the generated query actually answers the initial question by invoking GenAI
+        # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
+        logger.info("Check whether the rewritten SQL query now matches the original question...")
+        sql_explanation = sql_explain(question, generated_sql, table_result_joined)
+        logger.debug('Generated SQL explanation: ' + json.dumps(sql_explanation))
+        if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
+          logger.info("Generated SQL explanation matches initial question.")
+          status['sql_validation_success'] = True
 
         if status['sql_validation_success'] is True:
-         
+        
           # IF required, final validation of the rewritten query by executing a dry-run on BigQuery
-          if workflow['skip_final_dry_run'] is False:
-            logger.info('Executing BigQuery dry-run for the validated rewritten SQL Query, only if the initial validation failed...')
-            status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=True)
-
-            if status['bq_status']['status'] == 'Success':
-              logger.info('BigQuery dry-run successfully completed for rewritten SQL Query.')
-            else:
-              logger.error('BigQuery dry-run failed for the rewritten SQL Query. Can\'t answer user query.')
-              status['status'] = 'Error'
-              status['sql_validation_success'] = False
-              status['error_message'] = status['bq_status']['error_message']
-
-        else:
-          logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
-          status['status'] = 'Error'
-          status['error_message'] = sql_explanation['mismatch_details']
-
-        #appen_2_bq_result = append_2_bq(cfg.validation_model_id, question, generated_sql, 'N', 'N', '', '')
-
-
-      if status['sql_validation_success'] is True:
-
-        if cfg.execute_final_sql:
-          # Query is valid, now executing it against BigQuery
-          logger.info('Executing generated and validated SQL on BigQuery')
-          status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=False)
+          logger.info('Executing BigQuery dry-run for the validated rewritten SQL Query, only if the initial validation failed...')
+          status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=True)
 
           if status['bq_status']['status'] == 'Success':
-            logger.info('BigQuery execution successfully completed.')
-            status['status'] = 'Success'
-            
+            workflow['stop_loop'] = True
+            logger.info('BigQuery dry-run successfully completed for rewritten SQL Query.')
           else:
-            logger.error('BigQuery execution failed. Check the error message for more information. Can\'t answer user query.')
-            status['status'] = 'Error'
+            logger.error('BigQuery dry-run failed for the rewritten SQL Query. Can\'t answer user query.')
+            workflow['stop_loop'] = False
             status['sql_validation_success'] = False
-            status['error_message'] = status['bq_status']['error_message']
+            sql_explanation['mismatch_details'] = status['bq_status']['error_message']
 
-        else:
-          logger.info('Skipping BigQuery execution as stated in the configuration file.')
+        workflow['explanation_retry_count'] += 1
+        if workflow['explanation_retry_count'] > workflow['explanation_retry_max_count']:
+          workflow['stop_loop'] = True
+
+      #appen_2_bq_result = append_2_bq(cfg.validation_model_id, question, generated_sql, 'N', 'N', '', '')
+
+
+    if status['sql_validation_success'] is True:
+
+      if cfg.execute_final_sql:
+        # Query is valid, now executing it against BigQuery
+        logger.info('Executing generated and validated SQL on BigQuery')
+        status['bq_status'], sql_result_df = execute_bq_query(generated_sql, dry_run=False)
+
+        if status['bq_status']['status'] == 'Success':
+          logger.info('BigQuery execution successfully completed.')
           status['status'] = 'Success'
-        
-      if status['status'] == 'Success' and cfg.auto_add_knowngood_sql is True:
-        #### Adding to the Known Good SQL Vector DB
-        logger.info("Adding Known Good SQL to Vector DB...")
-        start_time = time.time()
-        pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
-        sql_added_to_vector_db_duration = time.time() - start_time
-        status['sql_added_to_vector_db_duration'] = sql_added_to_vector_db_duration
-        logger.info('SQL added to Vector DB')
+          
+        else:
+          logger.error('BigQuery execution failed. Check the error message for more information. Can\'t answer user query.')
+          status['status'] = 'Error'
+          status['sql_validation_success'] = False
+          status['error_message'] = status['bq_status']['error_message']
 
-    else:
-      # Found the record on vector id
-      # logger.info('\n Found Question in Vector. Returning the SQL')
-      logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
-      generated_sql = search_sql_vector_by_id_return
-      if cfg.execute_final_sql is True:
-          bq_status, final_exec_result_df = execute_bq_query(search_sql_vector_by_id_return, dry_run=False)
-
-          #TODO Check BQ response status
-          sql_result_df = final_exec_result_df
-          logger.info('Question: ' + question)
-          logger.info('Final SQL Execution Result:\n' + final_exec_result_df)
-
-      else:  # Do not execute final SQL
-          logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False")
-      logger.info('will call append to bq next')
-      appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
-
-      status['status'] = 'Success'
-
-    if sql_result_df is not None:
-      if 'hll_user_aggregates' in matched_tables:
-        sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
-        is_audience_result = True
       else:
-        sql_result_str = sql_result_df.to_html()
-        is_audience_result = True
+        logger.info('Skipping BigQuery execution as stated in the configuration file.')
+        status['status'] = 'Success'
+
     else:
-      sql_result_str = ''
-      is_audience_result = False
+      logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
+      status['status'] = 'Error'
+      status['error_message'] = sql_explanation['mismatch_details']
+      
+    if status['status'] == 'Success' and cfg.auto_add_knowngood_sql is True:
+      #### Adding to the Known Good SQL Vector DB
+      logger.info("Adding Known Good SQL to Vector DB...")
+      start_time = time.time()
+      pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
+      sql_added_to_vector_db_duration = time.time() - start_time
+      status['sql_added_to_vector_db_duration'] = sql_added_to_vector_db_duration
+      logger.info('SQL added to Vector DB')
 
-    response = {
-      'status': status['status'],
-      'error_message': status['error_message'] if sql_result_df is None else None,
-      'generated_sql': '<pre>' + generated_sql + '</pre>' if generated_sql != '' else None,
-      'sql_result': sql_result_str if sql_result_df is not None else None,
-      'is_audience_result': str(is_audience_result) if sql_result_df is not None else 'False',
-      'total_execution_time': round(time.time() - total_start_time, 3),
-      'embedding_generation_duration': round(metrics['embedding_duration'], 3),
-      'similar_questions_duration': round(metrics['similar_questions_duration'], 3),
-      'table_matching_duration': round(metrics['table_matching_duration'], 3),
-      'sql_generation_duration': round(metrics['sql_generation_duration'], 3) if metrics['sql_generation_duration'] != -1 else None,
-      'bq_execution_duration': round(metrics['bq_execution_duration'], 3) if metrics['bq_execution_duration'] != -1 else None,
-      'sql_added_to_vector_db_duration' : round(metrics['sql_added_to_vector_db_duration'], 3) if sql_result_df is not None and cfg.auto_add_knowngood_sql is True else None
-    }
+  else:
+    # Found the record on vector id
+    # logger.info('\n Found Question in Vector. Returning the SQL')
+    logger.info("Found matching SQL request in pgVector: ", search_sql_vector_by_id_return)
+    generated_sql = search_sql_vector_by_id_return
+    if cfg.execute_final_sql is True:
+        bq_status, final_exec_result_df = execute_bq_query(search_sql_vector_by_id_return, dry_run=False)
 
-    logger.info("Generated object: \n" + str(response))
+        #TODO Check BQ response status
+        sql_result_df = final_exec_result_df
+        logger.info('Question: ' + question)
+        logger.info('Final SQL Execution Result:\n' + final_exec_result_df)
 
-    return response
+    else:  # Do not execute final SQL
+        logger.info("Not executing final SQL since EXECUTE_FINAL_SQL variable is False")
+    logger.info('will call append to bq next')
+    appen_2_bq_result = append_2_bq(cfg.model_id, question, search_sql_vector_by_id_return, 'Y', 'N', '', '')
 
-  except Exception as err:
-    print("Exception raised: " + str(err.args))
+    status['status'] = 'Success'
+
+  if sql_result_df is not None:
+    if 'hll_user_aggregates' in matched_tables:
+      sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
+      is_audience_result = True
+    else:
+      sql_result_str = sql_result_df.to_html()
+      is_audience_result = True
+  else:
+    sql_result_str = ''
+    is_audience_result = False
+
+  response = {
+    'status': status['status'],
+    'error_message': status['error_message'] if sql_result_df is None else None,
+    'generated_sql': '<pre>' + generated_sql + '</pre>' if generated_sql != '' else None,
+    'sql_result': sql_result_str if sql_result_df is not None else None,
+    'is_audience_result': str(is_audience_result) if sql_result_df is not None else 'False',
+    'total_execution_time': round(time.time() - total_start_time, 3),
+    'embedding_generation_duration': round(metrics['embedding_duration'], 3),
+    'similar_questions_duration': round(metrics['similar_questions_duration'], 3),
+    'table_matching_duration': round(metrics['table_matching_duration'], 3),
+    'sql_generation_duration': round(metrics['sql_generation_duration'], 3) if metrics['sql_generation_duration'] != -1 else None,
+    'bq_execution_duration': round(metrics['bq_execution_duration'], 3) if metrics['bq_execution_duration'] != -1 else None,
+    'sql_added_to_vector_db_duration' : round(metrics['sql_added_to_vector_db_duration'], 3) if sql_result_df is not None and cfg.auto_add_knowngood_sql is True else None
+  }
+
+  logger.info("Generated object: \n" + str(response))
+
+  return response
 
 def test_sql_plan_execution(generated_sql):
   from google.cloud import bigquery

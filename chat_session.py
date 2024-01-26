@@ -74,6 +74,15 @@ class SQLCorrectionChat(SessionChat):
     return clean_sql(str(response))
 
 
+def question_to_query_examples(similar_questions):
+  similar_questions_str = ''
+  if len(similar_questions) > 0:
+    similar_questions_str = "Good SQL Examples:\n\n"
+    for similar_question in similar_questions:
+      similar_questions_str += "    [Question]:\n" + similar_question['question'] + "\n    [SQL Query]:\n" + similar_question['sql_query'] + "\n\n"
+  return similar_questions_str
+
+
 class ExplanationCorrectionChat(SessionChat):
 
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
@@ -83,28 +92,7 @@ The user provides versions of the query with the Target Question it is answering
 Generate a never seen alternative SQL query that answers better the Target Question by correcting the issues highlighted for the previous version of the SQL query.
 
 Guidelines:
-    - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: select 'Question is not related to the dataset' as unrelated_answer from dual;
-    - Join as minimal tables as possible.
-    - When joining tables ensure all join columns are the same data_type.
-    - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
-    - When asked to count the number of users, always perform an estimation using Hyperloglog++ (HLL) sketches using HLL_COUNT.MERGE.
-    - For all requests not related to the number of users matching certain criteria, never use estimates like HyperLogLog++ (HLL) sketches
-    - Never use GROUP BY on HLL sketches.
-    - Never use HLL_COUNT.MERGE inside a WHERE statement.
-    - Never use HLL.EXTRACT.
-    - Convert TIMESTAMP to DATE.
-    - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
-    - Don't include any comments in code.
-    - Remove ```sql and ``` from the output and generate the SQL in single line.
-    - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
-    - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
-    - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.
-    - Use ONLY the column names (column_name) mentioned in Table Schema. DO NOT USE any other column names outside of this.
-    - Associate column_name mentioned in Table Schema only to the table_name specified under Table Schema.
-    - Use SQL 'AS' statement to assign a new name temporarily to a table column or even a table wherever needed.
-    - Table names are case sensitive. DO NOT uppercase or lowercase the table names.
-    - Owner (dataset) is case sensitive. DO NOT uppercase or lowercase the owner.
-    - Project_id is case sensitive. DO NOT uppercase or lowercase the project_id.
+{cfg.prompt_guidelines}
     """
    
   def __init__(self, model):
@@ -112,30 +100,28 @@ Guidelines:
 
   def get_chat_response(self, table_schema, similar_questions, question, generated_sql, generated_explanation, error_msg):
 
+    similar_questions_str = question_to_query_examples(similar_questions)
+
     context_prompt = f"""
 What is an alternative SQL statement to address the error mentioned below?
 Present a different SQL from previous ones. It is important that the query still answer the original question.
 Do not repeat suggestions.
 
-Table Schema:
+[Table Schema]:
 {table_schema}
 
-Good SQL Examples:
-{similar_questions}
+{similar_questions_str}
 
-Target Question:
+[Question]:
     {question}
 
-Previously Generated (bad) SQL Query:
+[Previously Generated (bad) SQL Query]:
     {generated_sql}
 
-Generated Explanation of the (bad) SQL Query:
-    {generated_explanation}
-
-(bad) SQL Query Issues:
+[(bad) SQL Query Issues]:
     {error_msg}
 
-Corrected SQL Query:
+[Corrected SQL Query]:
 
     """
 

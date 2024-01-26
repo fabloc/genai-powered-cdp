@@ -1,6 +1,0 @@
-[
-    {
-        "question": "What are the top 5 products purchased in the last 3 months",
-        "sql_query": "SELECT\nproduct_name,\nSUM(daily_product_purchased_items) AS total_purchased_items\nFROM\ncdp-demo-flocquet.publisher_1_dataset.products_aggregates\nWHERE\nDATE(session_day) >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH)\nGROUP BY\nproduct_name\nORDER BY\ntotal_purchased_items DESC\nLIMIT 5"
-    }
-]

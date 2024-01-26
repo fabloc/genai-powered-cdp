@@ -1,0 +1,108 @@
+- Question: Number of users who purchased for more than $50 in total and who purchased at least 2 'Roxy' products in the last 3 months
+  SQL Query: |-
+    SELECT
+      HLL_COUNT.MERGE(id_sketch) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
+    WHERE
+      total_spend > 50
+      AND (
+        SELECT
+          SUM(daily_purchased_products_by_brands_unnested.purchased_items)
+        FROM
+          UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
+        WHERE
+          daily_purchased_products_by_brands_unnested.brand_name = 'Roxy'
+          AND DATE(session_day) >= DATE_SUB(DATE(CURRENT_DATE()), INTERVAL 3 MONTH)
+      ) >= 2
+
+
+- Question: Number of users with age under 35, located in France, and who have already bought 'Retrofit' brand products, before August 2023
+  SQL Query: |-
+    SELECT 
+      HLL_COUNT.MERGE(id_sketch) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
+    WHERE
+      age_group IN UNNEST(["-18", "19-24", "25-34"]) AND
+      country = 'France' AND
+      EXISTS (
+        SELECT
+          1
+        FROM
+          UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
+        WHERE
+          daily_purchased_products_by_brands_unnested.brand_name = 'Retrofit'
+          AND DATE(session_day) < '2023-08-01'
+      )
+
+
+- Question: Number of users with age under 35, who have already bought 'Retrofit' brand products, but not after '2023-08-01'
+  SQL Query: |-
+    SELECT
+      HLL_COUNT.MERGE(id_sketch) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
+    WHERE
+      age_group IN UNNEST(["-18", "19-24", "25-34"]) AND
+      EXISTS(
+        SELECT
+          1
+        FROM
+          UNNEST(total_purchased_products_by_brands) AS total_purchased_products_by_brands_unnested
+        WHERE
+          total_purchased_products_by_brands_unnested.purchased_items > 0 AND
+          total_purchased_products_by_brands_unnested.brand_name = 'Retrofit'
+      ) AND
+      NOT EXISTS (
+        SELECT
+          1
+        FROM
+          UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
+        WHERE
+          daily_purchased_products_by_brands_unnested.brand_name = 'Retrofit'
+          AND DATE(session_day) > '2016-03-01'
+      )
+
+- Question: Number of users who spent more than $1000 in total during the last 3 months
+  SQL Query: |-
+    SELECT
+      HLL_COUNT.MERGE(id_sketch) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
+    WHERE
+      (SELECT
+        SUM(daily_spend)
+      FROM
+        UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
+      WHERE
+        DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
+      ) >= 0
+
+- Question: Number of users who spend more than $100 in 'Roxy' products in total but did not purchase any 'Roxy' product during the last 90 days
+  SQL Query: |-
+    SELECT
+      HLL_COUNT.MERGE(id_sketch) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`,
+      UNNEST(total_purchased_products_by_brands) AS total_purchased_products_by_brands_unnested
+    WHERE
+      EXISTS(
+        SELECT
+          1
+        FROM
+          UNNEST(total_purchased_products_by_brands) AS total_purchased_products_by_brands_unnested
+        WHERE
+          total_purchased_products_by_brands_unnested.brand_name = 'Roxy' AND
+          total_purchased_products_by_brands_unnested.brand_spend > 100
+      )
+      AND
+      NOT EXISTS (
+        SELECT
+          1
+        FROM
+          UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
+        WHERE
+          daily_purchased_products_by_brands_unnested.brand_name = 'Retrofit' AND
+          DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY) AND CURRENT_DATE()
+      )
