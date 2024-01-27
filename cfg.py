@@ -39,8 +39,8 @@ log_table_name = analytics_config['log_table_name']
 
 # ML Models variables
 sql_generation_model_id = models_config['sql_generation_model_id']
+sql_correction_model_id = models_config['sql_correction_model_id']
 validation_model_id = models_config['validation_model_id']
-chat_model_id = models_config['chat_model_id']
 embeddings_model = models_config['embeddings_model']
 
 # Vector DB variables
@@ -71,6 +71,7 @@ prompt_guidelines = f"""
     - Never use GROUP BY on HLL sketches.
     - Never use HLL_COUNT.MERGE inside a WHERE statement.
     - Never use HLL.EXTRACT.
+    - Never use ARRAY_CONTAINS.
     - Convert TIMESTAMP to DATE.
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.

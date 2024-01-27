@@ -4,10 +4,13 @@ formatters:
     format: '[%(asctime)s][%(levelname)s][%(name)s][%(funcName)s()] %(message)s'
 handlers:
   file:
-    class: logging.FileHandler
+    class: logging.handlers.TimedRotatingFileHandler
     level: DEBUG
     formatter: defaultFormatter
-    filename: cdp.log
+    filename: ./cdp.log
+    when: D
+    interval: 7
+    backupCount: 10
   console:
     class: logging.StreamHandler
     level: INFO

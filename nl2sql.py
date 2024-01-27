@@ -1,14 +1,12 @@
 # Common Imports
-from vertexai.preview.generative_models import GenerativeModel
-from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
 import pandas_gbq
 import pgvector_handler
 import os, logging, json, time, yaml
-from json import JSONDecodeError
 import cfg
-import chat_session
+import genai
 import bigquery_handler
 import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
 # Define BigQuery Dictionary Queries and Helper Functions
 
@@ -80,6 +78,7 @@ ORDER BY
 project_id, owner, table_name
 '''
 
+executor = ThreadPoolExecutor(5)
 
 def init():
 
@@ -88,35 +87,10 @@ def init():
 
   logger.info("Starting nl2sql module")
 
-  #vertexai.init(project=PROJECT_ID, location="us-central1")
-  global sql_generation_model
-  sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.sql_generation_model_id)
-
-  global validation_model
-  validation_model = createModel(cfg.project_id, "us-central1", cfg.validation_model_id)
-
-  global chat_model
-  chat_model = createModel(cfg.project_id, cfg.region, cfg.chat_model_id)
+  genai.init()
 
   if cfg.update_db_at_startup is True:
     init_table_and_columns_desc()
-
-# Initialize Palm Models to be used
-def createModel(PROJECT_ID, REGION, model_id):
-
-  if model_id == 'code-bison-32k':
-    model = CodeGenerationModel.from_pretrained(model_id)
-  elif model_id == 'gemini-pro':
-    model = GenerativeModel(model_id)
-  elif model_id == 'codechat-bison-32k':
-    model = CodeChatModel.from_pretrained(model_id)
-  elif model_id == 'chat-bison-32k':
-    model = ChatModel.from_pretrained(model_id)
-  elif model_id == 'text-unicorn':
-    model = TextGenerationModel.from_pretrained(model_id)
-  else:
-    raise ValueError
-  return model
 
 
 def schema_generator(sql):
@@ -139,7 +113,7 @@ def add_table_comments(columns_df, pkeys_df, fkeys_df, table_comments_df):
         - foreign keys metadata: {fkeys_df.to_markdown(index = False)}
         - table metadata: {table_comments_df.to_markdown(index = False)}
       """
-        context_query = generate_sql(context_prompt)
+        context_query = genai.generate_sql(context_prompt)
         table_comments_df.at[index, 'comments'] = context_query
 
   return table_comments_df
@@ -281,130 +255,6 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
   return aug_table_comments_df
 
 
-# Build a custom "detailed_description" in the columns dataframe. This will be indexed by the Vector DB
-# Augment columns dataframe with detailed description. This detailed description column will be the one used as the document when adding the record to the VectorDB
-
-
-def generate_sql(model, context_prompt):
-  if isinstance(model, GenerativeModel):
-    generated_sql_json = model.generate_content(
-      context_prompt,
-      generation_config={
-        "max_output_tokens": 1024,
-        "temperature": 0,
-        "top_p": 1
-    })
-    generated_sql = generated_sql_json.candidates[0].content.parts[0].text
-  elif isinstance(model, TextGenerationModel):
-    parameters = {
-        "candidate_count": 1,
-        "max_output_tokens": 1024,
-        "temperature": 0,
-        "top_k": 40
-    }
-    generated_sql_json = model.predict(
-      context_prompt,
-      **parameters)
-    generated_sql = generated_sql_json.text
-  return chat_session.clean_json(generated_sql)
-
-
-def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
-
-  similar_questions_str = chat_session.question_to_query_examples(similar_questions)
-
-  not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
-  context_prompt = f"""
-You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the following question while using the provided context to correctly refer to the BigQuery tables and the needed column names.
-
-Guidelines:
-{cfg.prompt_guidelines}
-
-Tables Schema:
-{table_result_joined}
-
-{similar_questions_str}
-
-[Question]:
-{question}
-
-[SQL Generated]:
-
-    """
-
-    #Column Descriptions:
-    #{column_result_joined}
-
-  logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
-
-  context_query = generate_sql(sql_generation_model, context_prompt)
-
-  return context_query
-
-def sql_explain(question, generated_sql, table_schema):
-  context_prompt = f"""
-You are a BigQuery SQL guru. Generate a high-level question to which the [SQL Query] answers.
-
-Guidelines:
-  - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the column descriptions.
-  - In the generated question, stay as concise as possible while not missing any filtering and time range specified by the [SQL query].
-  - In the generated question, if no time range is specified for a specific filter, consider that it is global, or total.
-
-[Tables Schema]:
-{table_schema}
-
-[SQL Query]:
-{generated_sql}
-"""
-
-  logger.debug('Validation - Question Generation from SQL Prompt: \n' + context_prompt)
-
-  generated_question = generate_sql(validation_model, context_prompt)
-
-  response_json = {
-    "is_matching": "{Answer with 'True' or 'False' depending on the outcome of the comparison between the provided Query and the Reference Question}",
-    "mismatch_details": "{Write all identified missing or incorrect filters from the Query. If not, return an empty string. Be specific when highlighting a difference}"
-  }
-
-  context_prompt = f"""
-Compare a Query to a Reference Question and assess whether they are equivalent or not.
-
-[Guidelines]:
-- Answer using the following json format:
-{response_json}
-- Remove ```json prefix and ``` suffix from the outputs.
-- Use double quotes "" for json property names and values in the returned json object.
-
-[Reference Question]:
-{question}
-
-[Query]:
-{generated_question}
-"""
-
-  logger.debug('Validation - Question Comparison Prompt: \n' + context_prompt)
-
-  try:
-
-    sql_explanation = generate_sql(validation_model, context_prompt)
-    logger.info("Validation status: \n" + sql_explanation)
-    validation_json = json.loads(sql_explanation, strict=False)
-
-  except JSONDecodeError as e:
-    logger.error("Error while deconding JSON response:: " + str(e))
-    sql_explanation['is_matching'] = 'False'
-    sql_explanation['mismatch_details'] = 'Returned JSON malformed'
-  except Exception as e:
-    logger.error("Exception: " + str(e))
-    sql_explanation['is_matching'] = 'False'
-    sql_explanation['mismatch_details'] = 'Undefined error. Retry'
-
-
-  validation_json['generated_question'] = generated_question
-
-  return validation_json
-
-
 def call_gen_sql(question):
 
   total_start_time = time.time()
@@ -426,7 +276,8 @@ def call_gen_sql(question):
     'error_retry_max_count': cfg.sql_max_error_retry,
     'explanation_retry_max_count': cfg.sql_max_explanation_retry,
     'error_retry_count': 0,
-    'explanation_retry_count': 0
+    'explanation_retry_count': 0,
+    'first_loop': True
   }
 
   status = {
@@ -481,7 +332,7 @@ def call_gen_sql(question):
 
         start_time = time.time()
         logger.info("Generating SQL query using LLM...")
-        generated_sql=gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
+        generated_sql = genai.gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
         logger.info("SQL query generated:\n" + generated_sql)
         metrics['sql_generation_duration'] = time.time() - start_time
         if 'unrelated_answer' in generated_sql :
@@ -502,11 +353,11 @@ def call_gen_sql(question):
 
       # Execute SQL test plan and semantic validation in parallel in order to minimize overall query generation time
       logger.info("Executing SQL test plan and SQL query semantic validation in parallel...")
-      with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future_test_plan = executor.submit(bigquery_handler.execute_bq_query, generated_sql, dry_run=True)
-        future_sql_validation = executor.submit(sql_explain, question, generated_sql, table_result_joined)
-        status['bq_status'],_ = future_test_plan.result()
-        sql_explanation = future_sql_validation.result()
+
+      future_test_plan = executor.submit(bigquery_handler.execute_bq_query, generated_sql, dry_run=True)
+      future_sql_validation = executor.submit(genai.sql_explain, question, generated_sql, table_result_joined)
+      status['bq_status'],_ = future_test_plan.result()
+      sql_explanation = future_sql_validation.result()
 
       if status['bq_status']['status'] == 'Success':
 
@@ -527,13 +378,15 @@ def call_gen_sql(question):
             'explain_plan_validation',
             status['bq_status']['error_message'] )
           ### Need to call retry
-          if error_correction_chat_session is None: error_correction_chat_session = chat_session.SQLCorrectionChat(sql_generation_model)
+          if workflow['first_loop'] is True:
+            error_correction_chat_session = genai.SQLCorrectionChat(genai.sql_correction_model)
+            workflow['first_loop'] = False
           rewrite_result = error_correction_chat_session.get_chat_response(
+            table_result_joined,
+            similar_questions_return,
             question,
             generated_sql,
-            table_result_joined,
-            status['bq_status']['error_message'],
-            similar_questions_return)
+            status['bq_status']['error_message'])
           generated_sql=rewrite_result
 
       if workflow['stop_loop'] is not True:
@@ -565,12 +418,15 @@ def call_gen_sql(question):
     else:
 
       workflow['stop_loop'] = status['sql_validation_success']
+      workflow['first_loop'] = True
 
       while workflow['stop_loop'] is False:
       
         logger.info("Rewriting SQL request to address previous generated SQL semantic issues...")
 
-        if explanation_correction_chat_session is None: explanation_correction_chat_session = chat_session.ExplanationCorrectionChat(sql_generation_model)
+        if workflow['first_loop'] is True:
+          explanation_correction_chat_session = genai.ExplanationCorrectionChat(genai.sql_correction_model)
+          workflow['first_loop'] = False
 
         generated_sql = explanation_correction_chat_session.get_chat_response(
           table_result_joined,
@@ -585,7 +441,7 @@ def call_gen_sql(question):
         # Check whether the generated query actually answers the initial question by invoking GenAI
         # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
         logger.info("Check whether the rewritten SQL query now matches the original question...")
-        sql_explanation = sql_explain(question, generated_sql, table_result_joined)
+        sql_explanation = genai.sql_explain(question, generated_sql, table_result_joined)
         logger.debug('Generated SQL explanation: ' + json.dumps(sql_explanation))
         if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
           logger.info("Generated SQL explanation matches initial question.")

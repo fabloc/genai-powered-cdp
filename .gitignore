@@ -1,4 +1,5 @@
 .env
 *.pyc
 *.log
+*.log.*
 test_*.py
