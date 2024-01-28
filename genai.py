@@ -2,8 +2,9 @@ import logging, cfg
 from vertexai.preview.generative_models import Content, Part
 from vertexai.preview.generative_models import GenerativeModel
 from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
-import json
+import json, time
 from json import JSONDecodeError
+from concurrent.futures import ThreadPoolExecutor
 
 def init():
 
@@ -12,8 +13,11 @@ def init():
   logger = logging.getLogger('nl2sql')
 
   #vertexai.init(project=PROJECT_ID, location="us-central1")
-  global sql_generation_model
-  sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.sql_generation_model_id)
+  global fast_sql_generation_model
+  fast_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fast_sql_generation_model)
+
+  global fine_sql_generation_model
+  fine_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fine_sql_generation_model)
 
   #vertexai.init(project=PROJECT_ID, location="us-central1")
   global sql_correction_model
@@ -21,6 +25,9 @@ def init():
 
   global validation_model
   validation_model = createModel(cfg.project_id, "us-central1", cfg.validation_model_id)
+
+  global executor
+  executor = ThreadPoolExecutor(5)
 
 # Initialize Palm Models to be used
 def createModel(PROJECT_ID, REGION, model_id):
@@ -65,7 +72,7 @@ def generate_sql(model, context_prompt):
   return clean_json(generated_sql)
 
 
-def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
+def gen_dyn_rag_sql(question,table_result_joined, similar_questions, fast: bool = False):
 
   similar_questions_str = question_to_query_examples(similar_questions)
 
@@ -93,7 +100,9 @@ Tables Schema:
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  context_query = generate_sql(sql_generation_model, context_prompt)
+  model = fast_sql_generation_model if fast else fine_sql_generation_model
+
+  context_query = generate_sql(model, context_prompt)
 
   return context_query
 
@@ -206,8 +215,8 @@ class SQLCorrectionChat(SessionChat):
       {cfg.prompt_guidelines}
     """
    
-  def __init__(self, model):
-      super().__init__(model, self.sql_correction_context)
+  def __init__(self):
+      super().__init__(sql_correction_model, self.sql_correction_context)
 
   def get_chat_response(self, table_schema, similar_questions, question, generated_sql, error_msg):
 
@@ -259,8 +268,8 @@ Guidelines:
 {cfg.prompt_guidelines}
     """
    
-  def __init__(self, model):
-      super().__init__(model, self.explanation_correction_context)
+  def __init__(self):
+      super().__init__(sql_correction_model, self.explanation_correction_context)
 
   def get_chat_response(self, table_schema, similar_questions, question, generated_sql, generated_explanation, error_msg):
 

@@ -38,10 +38,12 @@ dataset_location = analytics_config['dataset_location']
 log_table_name = analytics_config['log_table_name']
 
 # ML Models variables
-sql_generation_model_id = models_config['sql_generation_model_id']
+fast_sql_generation_model = models_config['fast_sql_generation_model_id']
+fine_sql_generation_model = models_config['fine_sql_generation_model_id']
 sql_correction_model_id = models_config['sql_correction_model_id']
 validation_model_id = models_config['validation_model_id']
 embeddings_model = models_config['embeddings_model']
+models_timeout = models_config.getint('models_timeout') if 'models_timeout' in models_config else 20
 
 # Vector DB variables
 update_db_at_startup = vector_config.getboolean('update_db_at_startup')

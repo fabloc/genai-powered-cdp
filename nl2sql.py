@@ -255,6 +255,41 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
   return aug_table_comments_df
 
 
+# Define a function to execute other functions with blocking I/Os in a thread with a timeout, in order to handle cases where the
+# the I/O requests get stuck forever.
+def execute_with_timeout(func, *args, **kwargs):
+  # Set the initial backoff time to 1 second.
+  backoff_time = 1
+
+  # Set the maximum number of retries to 5.
+  max_retries = 5
+
+  # Create a counter to track the number of retries.
+  retry_count = 0
+
+  timeout = cfg.models_timeout
+
+  while retry_count < max_retries:
+    future_sql_validation = executor.submit(func, *args, **kwargs)
+    try:
+      response = future_sql_validation.result(timeout)
+      return response
+    except TimeoutError:
+      logger.error('Time out waiting for model response. Retrying...')
+
+      # Increase the backoff time.
+      backoff_time *= 2
+
+      # Sleep for the backoff time.
+      time.sleep(backoff_time)
+
+      # Increment the retry count.
+      retry_count += 1
+  
+  logger.critical('Max retries exceeded.')
+  raise TimeoutError
+
+
 def call_gen_sql(question):
 
   total_start_time = time.time()
@@ -272,6 +307,7 @@ def call_gen_sql(question):
   }
 
   workflow = {
+    'use_fast_workflow': False,
     'stop_loop': False,
     'error_retry_max_count': cfg.sql_max_error_retry,
     'explanation_retry_max_count': cfg.sql_max_explanation_retry,
@@ -311,9 +347,17 @@ def call_gen_sql(question):
     logger.info("Searching for similar questions in DB...")
     start_time = time.time()
     # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
-    similar_questions_return = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
+    similar_questions = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
+
+    # If similar requests were found, Gemini model can be used, which provides fatest generation performance with good
+    # accuracy when examples are provided. If none is available, unicorn model is best suited to infer a pattern for
+    # SQL queries from the guidelines and the tables schemas
+    if len(similar_questions) > 0:
+      logger.info('Using fast workflow and Gemini model for SQL Generation.')
+      workflow['use_fast_workflow'] = True
+
     metrics['similar_questions_duration'] = time.time() - start_time
-    logger.info("Found similar questions:\n" + str(similar_questions_return))
+    logger.info("Found similar questions:\n" + str(similar_questions))
 
     error_correction_chat_session=None
     explanation_correction_chat_session=None
@@ -332,7 +376,7 @@ def call_gen_sql(question):
 
         start_time = time.time()
         logger.info("Generating SQL query using LLM...")
-        generated_sql = genai.gen_dyn_rag_sql(question,table_result_joined, similar_questions_return)
+        generated_sql = genai.gen_dyn_rag_sql(question,table_result_joined, similar_questions, workflow['use_fast_workflow'])
         logger.info("SQL query generated:\n" + generated_sql)
         metrics['sql_generation_duration'] = time.time() - start_time
         if 'unrelated_answer' in generated_sql :
@@ -351,17 +395,25 @@ def call_gen_sql(question):
 
     while workflow['stop_loop'] is False:
 
-      # Execute SQL test plan and semantic validation in parallel in order to minimize overall query generation time
+      # If similar requests were found, Execute SQL test plan and semantic validation in parallel in order to minimize
+      # overall query generation time, as there is a high probability that the correct SQL Query will be found the first iteration.
       logger.info("Executing SQL test plan and SQL query semantic validation in parallel...")
 
       future_test_plan = executor.submit(bigquery_handler.execute_bq_query, generated_sql, dry_run=True)
-      future_sql_validation = executor.submit(genai.sql_explain, question, generated_sql, table_result_joined)
+      if workflow['use_fast_workflow'] is True:
+        future_sql_validation = executor.submit(genai.sql_explain, question, generated_sql, table_result_joined)
+        sql_explanation = future_sql_validation.result()
       status['bq_status'],_ = future_test_plan.result()
-      sql_explanation = future_sql_validation.result()
 
       if status['bq_status']['status'] == 'Success':
 
         status['sql_generation_success'] = True
+
+        # if fast workflow is not used, then SQL Validation was not performed, and must be done now before entering the
+        # SQL Validation / Correction loop
+        if workflow['use_fast_workflow'] is False:
+          sql_explanation = genai.sql_explain(question, generated_sql, table_result_joined)
+
         if sql_explanation['is_matching'] == 'True':
           status['sql_validation_success'] = True
         else:
@@ -371,23 +423,27 @@ def call_gen_sql(question):
       else:  # Failure on BigQuery SQL execution
           
           logger.info("Requesting SQL rewrite using chat LLM. Retry number #" + str(workflow['error_retry_count']))
-          append_2_bq_result = bigquery_handler.append_2_bq(
-            cfg.sql_generation_model_id,
-            question,
-            generated_sql, 'N', 'Y',
-            'explain_plan_validation',
-            status['bq_status']['error_message'] )
+          # append_2_bq_result = bigquery_handler.append_2_bq(
+          #   cfg.sql_generation_model_id,
+          #   question,
+          #   generated_sql, 'N', 'Y',
+          #   'explain_plan_validation',
+          #   status['bq_status']['error_message'] )
+
           ### Need to call retry
           if workflow['first_loop'] is True:
-            error_correction_chat_session = genai.SQLCorrectionChat(genai.sql_correction_model)
+            error_correction_chat_session = genai.SQLCorrectionChat()
             workflow['first_loop'] = False
-          rewrite_result = error_correction_chat_session.get_chat_response(
+
+          rewrite_result = execute_with_timeout(
+            error_correction_chat_session.get_chat_response,
             table_result_joined,
-            similar_questions_return,
+            similar_questions,
             question,
             generated_sql,
             status['bq_status']['error_message'])
-          generated_sql=rewrite_result
+          
+          generated_sql = rewrite_result
 
       if workflow['stop_loop'] is not True:
         workflow['error_retry_count'] += 1
@@ -408,11 +464,11 @@ def call_gen_sql(question):
         logger.info('Question cannot be answered using this dataset!')
         status['sql_generation_success'] = False
         status['error_message'] = 'Question cannot be answered using the configured datasets'
-        append_2_bq_result = bigquery_handler.append_2_bq(
-          cfg.model_id,
-          question,
-          'Question cannot be answered using this dataset!',
-          'N', 'N', 'unrelated_question', '')
+        # append_2_bq_result = bigquery_handler.append_2_bq(
+        #   cfg.model_id,
+        #   question,
+        #   'Question cannot be answered using this dataset!',
+        #   'N', 'N', 'unrelated_question', '')
     
     # If SQL query was successfully generated and tested on BigQuery, proceed with query validation
     else:
@@ -425,12 +481,13 @@ def call_gen_sql(question):
         logger.info("Rewriting SQL request to address previous generated SQL semantic issues...")
 
         if workflow['first_loop'] is True:
-          explanation_correction_chat_session = genai.ExplanationCorrectionChat(genai.sql_correction_model)
+          explanation_correction_chat_session = genai.ExplanationCorrectionChat()
           workflow['first_loop'] = False
 
-        generated_sql = explanation_correction_chat_session.get_chat_response(
+        generated_sql = execute_with_timeout(
+          explanation_correction_chat_session.get_chat_response,
           table_result_joined,
-          similar_questions_return,
+          similar_questions,
           question,
           generated_sql,
           sql_explanation['generated_question'],
@@ -441,7 +498,13 @@ def call_gen_sql(question):
         # Check whether the generated query actually answers the initial question by invoking GenAI
         # to analyze what the generated SQL is doing. It returns a json containing the result of the analysis
         logger.info("Check whether the rewritten SQL query now matches the original question...")
-        sql_explanation = genai.sql_explain(question, generated_sql, table_result_joined)
+
+        sql_explanation = execute_with_timeout(
+          genai.sql_explain,
+          question,
+          generated_sql,
+          table_result_joined)
+        
         logger.debug('Generated SQL explanation: ' + json.dumps(sql_explanation))
         if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
           logger.info("Generated SQL explanation matches initial question.")
@@ -493,7 +556,7 @@ def call_gen_sql(question):
     else:
       logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
       status['status'] = 'Error'
-      status['error_message'] = sql_explanation['mismatch_details']
+      status['error_message'] = sql_explanation['mismatch_details'] if status['sql_generation_success'] is True else status['bq_status']['error_message']
       
     if status['status'] == 'Success' and cfg.auto_add_knowngood_sql is True:
       #### Adding to the Known Good SQL Vector DB
