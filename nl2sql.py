@@ -1,11 +1,12 @@
 # Common Imports
 import pandas_gbq
 import pgvector_handler
-import os, logging, json, time, yaml
+import os, json, time, yaml, sys
+import logging.config
 import cfg
 import genai
 import bigquery_handler
-import concurrent.futures
+from streamlit.elements.lib.mutable_status_container import StatusContainer
 from concurrent.futures import ThreadPoolExecutor
 
 # Define BigQuery Dictionary Queries and Helper Functions
@@ -79,18 +80,6 @@ project_id, owner, table_name
 '''
 
 executor = ThreadPoolExecutor(5)
-
-def init():
-
-  global logger
-  logger = logging.getLogger('nl2sql')
-
-  logger.info("Starting nl2sql module")
-
-  genai.init()
-
-  if cfg.update_db_at_startup is True:
-    init_table_and_columns_desc()
 
 
 def schema_generator(sql):
@@ -290,7 +279,7 @@ def execute_with_timeout(func, *args, **kwargs):
   raise TimeoutError
 
 
-def call_gen_sql(question):
+def call_gen_sql(question, streamlit_status: StatusContainer):
 
   total_start_time = time.time()
   generated_sql = ''
@@ -323,6 +312,8 @@ def call_gen_sql(question):
     'sql_validation_success': False,
     'error_message': None
   }
+
+  streamlit_status.write("Generating SQL Request")
 
   logger.info("Creating text embedding from question...")
   start_time = time.time()
@@ -377,6 +368,7 @@ def call_gen_sql(question):
         start_time = time.time()
         logger.info("Generating SQL query using LLM...")
         generated_sql = genai.gen_dyn_rag_sql(question,table_result_joined, similar_questions, workflow['use_fast_workflow'])
+        streamlit_status.write("SQL Query Generated")
         logger.info("SQL query generated:\n" + generated_sql)
         metrics['sql_generation_duration'] = time.time() - start_time
         if 'unrelated_answer' in generated_sql :
@@ -402,8 +394,11 @@ def call_gen_sql(question):
       future_test_plan = executor.submit(bigquery_handler.execute_bq_query, generated_sql, dry_run=True)
       if workflow['use_fast_workflow'] is True:
         future_sql_validation = executor.submit(genai.sql_explain, question, generated_sql, table_result_joined)
-        sql_explanation = future_sql_validation.result()
       status['bq_status'],_ = future_test_plan.result()
+      streamlit_status.write("SQL Query Syntax Check: " + status['bq_status']['status'])
+      if workflow['use_fast_workflow'] is True:
+        sql_explanation = future_sql_validation.result()
+        streamlit_status.write("SQL Query Matches Initial Request: " + sql_explanation['is_matching'])
 
       if status['bq_status']['status'] == 'Success':
 
@@ -413,6 +408,7 @@ def call_gen_sql(question):
         # SQL Validation / Correction loop
         if workflow['use_fast_workflow'] is False:
           sql_explanation = genai.sql_explain(question, generated_sql, table_result_joined)
+          streamlit_status.write("Query Matches Initial Request: " + sql_explanation['is_matching'])
 
         if sql_explanation['is_matching'] == 'True':
           status['sql_validation_success'] = True
@@ -442,6 +438,8 @@ def call_gen_sql(question):
             question,
             generated_sql,
             status['bq_status']['error_message'])
+          
+          streamlit_status.write("New SQL Query Generated. Trial #" + str(workflow['error_retry_count']) + "/" + str(workflow['error_retry_max_count']))
           
           generated_sql = rewrite_result
 
@@ -493,6 +491,8 @@ def call_gen_sql(question):
           sql_explanation['generated_question'],
           sql_explanation['mismatch_details'])
         
+        streamlit_status.write("New SQL Query Generated. Trial " + str(workflow['explanation_retry_count']) + "/" + str(workflow['explanation_retry_max_count']))
+        
         logger.info("New SQL request generated")
 
         # Check whether the generated query actually answers the initial question by invoking GenAI
@@ -505,6 +505,8 @@ def call_gen_sql(question):
           generated_sql,
           table_result_joined)
         
+        streamlit_status.write("Query Matches Initial Request: " + sql_explanation['is_matching'])
+        
         logger.debug('Generated SQL explanation: ' + json.dumps(sql_explanation))
         if 'is_matching' in sql_explanation and sql_explanation['is_matching'] == 'True':
           logger.info("Generated SQL explanation matches initial question.")
@@ -512,6 +514,8 @@ def call_gen_sql(question):
 
         if status['sql_validation_success'] is True:
         
+          streamlit_status.write("All good! Executing query on BigQuery...")
+
           # IF required, final validation of the rewritten query by executing a dry-run on BigQuery
           logger.info('Executing BigQuery dry-run for the validated rewritten SQL Query, only if the initial validation failed...')
           status['bq_status'], sql_result_df = bigquery_handler.execute_bq_query(generated_sql, dry_run=True)
@@ -590,22 +594,18 @@ def call_gen_sql(question):
   if sql_result_df is not None:
     if 'hll_user_aggregates' in matched_tables:
       if sql_result_df.empty is not True:
-        sql_result_str = "Audience Size: " + str(sql_result_df.iat[0,0].item())
-      else:
-        sql_result_str = "No users matches the question :("
+        sql_result_df.reset_index(drop=True)
       is_audience_result = True
     else:
-      sql_result_str = sql_result_df.to_html()
-      is_audience_result = True
+      is_audience_result = False
   else:
-    sql_result_str = ''
     is_audience_result = False
 
   response = {
     'status': status['status'],
     'error_message': status['error_message'] if sql_result_df is None else None,
     'generated_sql': '<pre>' + generated_sql + '</pre>' if generated_sql != '' else None,
-    'sql_result': sql_result_str if sql_result_df is not None else None,
+    'sql_result': sql_result_df,
     'is_audience_result': str(is_audience_result) if sql_result_df is not None else 'False',
     'total_execution_time': round(time.time() - total_start_time, 3),
     'embedding_generation_duration': round(metrics['embedding_duration'], 3),
@@ -619,3 +619,38 @@ def call_gen_sql(question):
   logger.info("Generated object: \n" + str(response))
 
   return response
+
+# -----------------------------------------------------------------------------
+# Module Initialization
+
+# Load the log config file
+with open('logging_config.yaml', 'rt') as f:
+    config = yaml.safe_load(f.read())
+
+# Configure the logging module with the config file
+logging.config.dictConfig(config)
+
+# create logger
+global logger
+logger = logging.getLogger('nl2sql')
+logger.info("Starting nl2sql module")
+
+# Override default uncaught exception handler to log all exceptions using the custom logger
+def handle_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = handle_exception
+
+logger.info("-------------------------------------------------------------------------------")
+logger.info("-------------------------------------------------------------------------------")
+
+pgvector_handler.init()
+
+genai.init()
+
+if cfg.update_db_at_startup is True:
+  init_table_and_columns_desc()

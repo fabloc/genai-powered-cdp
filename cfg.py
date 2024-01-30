@@ -36,6 +36,7 @@ enable_analytics = analytics_config.getboolean('enable_analytics')
 dataset_name = analytics_config['dataset_name']
 dataset_location = analytics_config['dataset_location']
 log_table_name = analytics_config['log_table_name']
+display_bq_max_results = analytics_config.getint('display_bq_max_results') if 'display_bq_max_results' in analytics_config else 100
 
 # ML Models variables
 fast_sql_generation_model = models_config['fast_sql_generation_model_id']
@@ -77,6 +78,7 @@ prompt_guidelines = f"""
     - Convert TIMESTAMP to DATE.
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.
+    - Give user friendly names to tables and columns in the generated SQL query.
     - Remove ```sql and ``` from the output and generate the SQL in single line.
     - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
     - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.

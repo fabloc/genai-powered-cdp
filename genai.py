@@ -117,6 +117,7 @@ Guidelines:
   - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the column descriptions.
   - In the generated question, stay as concise as possible while not missing any filtering and time range specified by the [SQL query].
   - In the generated question, if no time range is specified for a specific filter, consider that it is global, or total.
+  - For each attribute, use the values described in the Table Schema.
 
 [Tables Schema]:
 {table_schema}
@@ -142,6 +143,7 @@ Guidelines:
 Compare a Query to a Reference Question and assess whether they are equivalent or not and how the Query should be modified to match the Reference Question.
 
 [Guidelines]:
+- Be careful with date comparison. For example, '2023-08-01' and 'August 1, 2023' are equivalent. 
 - Answer using the following json format:
 {response_json}
 - Remove ```json prefix and ``` suffix from the outputs.
@@ -183,7 +185,7 @@ class SessionChat:
 
     self.chat = model.start_chat(history=[
       Content(role="user", parts=[Part.from_text(context)]),
-      Content(role="model", parts=[Part.from_text('ok')]),
+      Content(role="model", parts=[Part.from_text('YES')]),
     ])
       
   def get_chat_response(self, prompt: str) -> str:
@@ -209,10 +211,12 @@ class SQLCorrectionChat(SessionChat):
 
       You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
       As the user provides versions of the query and the errors with the SQL Query, return a never seen alternative SQL query that fixes the errors.
-      It is important that the query still answers the original question.
+      It is important that the query still answers the original question and follows the following guidelines:
 
       Guidelines:
       {cfg.prompt_guidelines}
+
+      Please reply 'YES' if you understand.
     """
    
   def __init__(self):
@@ -221,7 +225,7 @@ class SQLCorrectionChat(SessionChat):
   def get_chat_response(self, table_schema, similar_questions, question, generated_sql, error_msg):
 
     context_prompt = f"""
-      What is an alternative SQL statement to address the error mentioned below?
+      What is an alternative SQL statement to address the Error Message mentioned below?
       Present a different SQL from previous ones. It is important that the query still answer the original question.
       Do not repeat suggestions.
 
@@ -266,6 +270,8 @@ Generate a never seen alternative SQL query that answers better the Original Que
 
 Guidelines:
 {cfg.prompt_guidelines}
+
+Please reply 'YES' if you understand.
     """
    
   def __init__(self):

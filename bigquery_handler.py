@@ -64,7 +64,7 @@ def execute_bq_query(sql_query, dry_run: bool = True):
       
       else:
         # Execute the SQL query.
-        df = pandas_gbq.read_gbq(sql_query, project_id=cfg.project_id)
+        df = pandas_gbq.read_gbq(sql_query, project_id=cfg.project_id, max_results = cfg.display_bq_max_results)
     
       # If the query is successful, return the results.
       bq_status['status'] = 'Success'

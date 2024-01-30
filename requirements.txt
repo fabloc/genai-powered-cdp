@@ -4,7 +4,7 @@ sqlalchemy
 asyncio
 pandas_gbq
 pg8000
-gradio
+streamlit
 vertexai
 pgvector
 pgvector[asyncpg]
