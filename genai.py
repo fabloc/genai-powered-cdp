@@ -111,12 +111,13 @@ def sql_explain(question, generated_sql, table_schema):
   logger.info("Starting SQL explanation...")
 
   context_prompt = f"""
-You are a BigQuery SQL guru. Generate a high-level question to which the [SQL Query] answers.
+You are a BigQuery SQL guru. Generate a high-level question to which the [SQL Query] answers. 
 
 Guidelines:
   - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the column descriptions.
   - In the generated question, stay as concise as possible while not missing any filtering and time range specified by the [SQL query].
   - In the generated question, if no time range is specified for a specific filter, consider that it is global, or total.
+  - Be specific about the dates in the generated question. For example, don't say 'before 2022' but instead say 'before 2022-01-01' or 'before January 2022'.
   - For each attribute, use the values described in the Table Schema.
 
 [Tables Schema]:
@@ -141,9 +142,11 @@ Guidelines:
 
   context_prompt = f"""
 Compare a Query to a Reference Question and assess whether they are equivalent or not and how the Query should be modified to match the Reference Question.
+The question is related to marketing data, so be mindful about equivalent terms. For example, 'customer' and 'user' are equivalent, 'items' and 'products' are equivalent.
+
 
 [Guidelines]:
-- Be careful with date comparison. For example, '2023-08-01' and 'August 1, 2023' are equivalent. 
+- Be careful with date comparison. For example, 'before August', 'before 2023-08-01', 'before August 1, 2023' and 'before August 1st, 2023' are all equivalent. 
 - Answer using the following json format:
 {response_json}
 - Remove ```json prefix and ``` suffix from the outputs.
@@ -244,7 +247,7 @@ class SQLCorrectionChat(SessionChat):
     {question_to_query_examples(similar_questions)}
     """
 
-    logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
+    logger.debug('SQL Correction Chat Prompt: \n' + context_prompt)
 
     response = super().get_chat_response(context_prompt)
 
@@ -264,14 +267,15 @@ class ExplanationCorrectionChat(SessionChat):
 
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
 
-  explanation_correction_context = f"""You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
-The user provides versions of the query with the Original Question it is answering, the question that the query actually answers to and details of why the query does not correctly answers the Original Question.
-Generate a never seen alternative SQL query that answers better the Original Question by correcting the issues highlighted for the previous version of the SQL query.
+  explanation_correction_context = f"""
+      You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
+      The user provides versions of the (bad) SQL Query with the Original Question it is answering, the question that the (bad) SQL query actually answers to and details of why the (bad) SQL Query does not correctly answers the Original Question.
+      Generate a never seen alternative SQL query that answers better the Original Question by correcting the issues highlighted for the previous version of the (bad) SQL query.
 
-Guidelines:
-{cfg.prompt_guidelines}
+      Guidelines:
+      {cfg.prompt_guidelines}
 
-Please reply 'YES' if you understand.
+      Please reply 'YES' if you understand.
     """
    
   def __init__(self):
@@ -282,30 +286,31 @@ Please reply 'YES' if you understand.
     similar_questions_str = question_to_query_examples(similar_questions)
 
     context_prompt = f"""
-What is an alternative SQL statement to address the error mentioned below?
-Present a different SQL from previous ones. It is important that the query be corrected to answer the Original Question.
-Do not repeat suggestions.
+      What is an alternative SQL Query to address the errors mentioned below?
+      Present a different SQL Query from previous ones. It is important that the query be corrected to answer the Original Question.
+      Do not repeat suggestions.
 
-[Table Schema]:
-{table_schema}
+      [Table Schema]:
+      {table_schema}
 
-{similar_questions_str}
+      {similar_questions_str}
 
-[Target Question]:
-    {question}
+      [Original Question]:
+          {question}
 
-[Previously Generated (bad) SQL Query]:
-    {generated_sql}
+      [Generated (bad) SQL Query]:
+          {generated_sql}
 
-[Question answered by the Generated (bad) SQL Query]:
-    {generated_explanation}
+      [Question answered by the Generated (bad) SQL Query]:
+          {generated_explanation}
 
-[(bad) SQL Query Issues]:
-    {error_msg}
+      [(bad) SQL Query Issues]:
+          {error_msg}
 
-[Corrected SQL Query]:
+      [Corrected SQL Query]:
 
     """
+    logger.debug('SQL Validation Correction Chat Prompt: \n' + context_prompt)
 
     response = super().get_chat_response(context_prompt)
 

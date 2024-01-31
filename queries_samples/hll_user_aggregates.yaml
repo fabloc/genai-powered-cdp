@@ -1,7 +1,7 @@
 - Question: Number of users who purchased for more than $50 in total and who purchased at least 2 'Roxy' products in the last 3 months
   SQL Query: |-
     SELECT
-      HLL_COUNT.MERGE(id_sketch) AS user_count
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
     FROM
       `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
     WHERE
@@ -20,11 +20,11 @@
 - Question: Number of users with age under 35, located in France, and who have already bought 'Retrofit' brand products, before August 2023
   SQL Query: |-
     SELECT 
-      HLL_COUNT.MERGE(id_sketch) AS user_count
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
     FROM
       `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
     WHERE
-      age_group IN UNNEST(["-18", "19-24", "25-34"]) AND
+      age < 35 AND
       country = 'France' AND
       EXISTS (
         SELECT
@@ -40,11 +40,11 @@
 - Question: Number of users with age under 35, who have already bought 'Retrofit' brand products, but not after '2023-08-01'
   SQL Query: |-
     SELECT
-      HLL_COUNT.MERGE(id_sketch) AS user_count
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
     FROM
       `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
     WHERE
-      age_group IN UNNEST(["-18", "19-24", "25-34"]) AND
+      age < 35 AND
       EXISTS(
         SELECT
           1
@@ -67,7 +67,7 @@
 - Question: Number of users who spent more than $1000 in total during the last 3 months
   SQL Query: |-
     SELECT
-      HLL_COUNT.MERGE(id_sketch) AS user_count
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
     FROM
       `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
     WHERE
@@ -82,7 +82,7 @@
 - Question: Number of users who spend more than $100 in 'Roxy' products in total but did not purchase any 'Roxy' product during the last 90 days
   SQL Query: |-
     SELECT
-      HLL_COUNT.MERGE(id_sketch) AS user_count
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
     FROM
       `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`,
       UNNEST(total_purchased_products_by_brands) AS total_purchased_products_by_brands_unnested
@@ -106,3 +106,50 @@
           daily_purchased_products_by_brands_unnested.brand_name = 'Retrofit' AND
           DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY) AND CURRENT_DATE()
       )
+- Question: What is the number of users who purchased one of the 5 most purchased products, during the last 3 months?
+  SQL Query: |-
+    SELECT
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`,
+      UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested,
+      UNNEST(daily_purchased_products_by_brands_unnested.product_ids) as product_id_unnested
+    WHERE
+      product_id_unnested IN (
+        SELECT
+          product_id
+        FROM
+          `cdp-demo-flocquet.publisher_1_dataset.products_aggregates`
+        WHERE
+          DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
+        ORDER BY daily_product_purchased_items DESC
+        LIMIT 5
+      ) AND
+      DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
+- Question: How many users purchased at least 2 products from the top 5 most purchased products in the last 12 months?
+  SQL Query: |-
+    SELECT
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
+    FROM (
+      SELECT
+        user_id,
+        COUNT(DISTINCT product_id_unnested) AS product_count
+      FROM
+        cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates,
+        UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested,
+        UNNEST(daily_purchased_products_by_brands_unnested.product_ids) as product_id_unnested
+      WHERE
+        product_id_unnested IN (
+          SELECT
+            product_id
+          FROM
+            cdp-demo-flocquet.publisher_1_dataset.products_aggregates
+          WHERE
+            DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH) AND CURRENT_DATE()
+          ORDER BY daily_product_purchased_items
+          DESC LIMIT 5
+        ) AND
+        DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH) AND CURRENT_DATE()
+      GROUP BY user_id
+    )
+    WHERE product_count >= 2

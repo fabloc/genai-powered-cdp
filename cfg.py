@@ -65,20 +65,17 @@ operator =  vector_config['operator']  # ["vector_cosine_ops", "vector_l2_ops", 
 # Prompt Configuration
 not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
 prompt_guidelines = f"""
-    - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: {not_related_msg}
+    - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: select 'Question is not related to the dataset' as unrelated_answer from dual.
     - Join as minimal tables as possible.
     - When joining tables ensure all join columns are the same data_type.
     - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
-    - When asked to count the number of users, always perform an estimation using Hyperloglog++ (HLL) sketches using HLL_COUNT.MERGE.
-    - For all requests not related to the number of users matching certain criteria, never use estimates like HyperLogLog++ (HLL) sketches
-    - Never use GROUP BY on HLL sketches.
-    - Never use HLL_COUNT.MERGE inside a WHERE statement.
-    - Never use HLL.EXTRACT.
+    - For all requests not related to the number of users matching certain criteria, always use approximate count.
+    - Never use "user_id" column in the "GROUP BY" statement for the top "SELECT" block.
     - Never use ARRAY_CONTAINS.
     - Convert TIMESTAMP to DATE.
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.
-    - Give user friendly names to tables and columns in the generated SQL query.
+    - Give human readable names to tables and columns in the generated SQL query.
     - Remove ```sql and ``` from the output and generate the SQL in single line.
     - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
     - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.

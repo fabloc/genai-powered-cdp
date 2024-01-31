@@ -131,6 +131,8 @@ def insert_sample_queries_lookup(tables_list):
         except yaml.YAMLError as exc:
           logger.error("Error loading YAML file containing sample questions: " + exc)
           logger.error("Skipping sample ingestion")
+        except Exception as err:
+          logger.error("Error: " + err.error_message())
         finally:
           stream.close()
 
@@ -206,7 +208,7 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
 
     for index, row in pkeys_df.loc[ (pkeys_df['owner'] == cur_table_owner) & (pkeys_df['table_name'] == cur_table_name)  ].iterrows():
       # Inside each owner.table_name combination
-      table_pk_cols.append( row['column_name']  )
+      table_pk_cols.append( row['COLUMN_NAME']  )
 
     for index, row in fkeys_df.loc[ (fkeys_df['owner'] == cur_table_owner) & (fkeys_df['table_name'] == cur_table_name) ].iterrows():
       # Inside each owner.table_name combination
@@ -293,6 +295,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     'sql_generation_duration': -1,
     'bq_validation_duration': -1,
     'bq_execution_duration': -1,
+    'sql_added_to_vector_db_duration': -1
   }
 
   workflow = {
@@ -393,7 +396,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 
       future_test_plan = executor.submit(bigquery_handler.execute_bq_query, generated_sql, dry_run=True)
       if workflow['use_fast_workflow'] is True:
-        future_sql_validation = executor.submit(genai.sql_explain, question, generated_sql, table_result_joined)
+        future_sql_validation = executor.submit(execute_with_timeout, genai.sql_explain, question, generated_sql, table_result_joined)
       status['bq_status'],_ = future_test_plan.result()
       streamlit_status.write("SQL Query Syntax Check: " + status['bq_status']['status'])
       if workflow['use_fast_workflow'] is True:
@@ -407,7 +410,11 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
         # if fast workflow is not used, then SQL Validation was not performed, and must be done now before entering the
         # SQL Validation / Correction loop
         if workflow['use_fast_workflow'] is False:
-          sql_explanation = genai.sql_explain(question, generated_sql, table_result_joined)
+          sql_explanation = execute_with_timeout(
+            genai.sql_explain,
+            question,
+            generated_sql,
+            table_result_joined)
           streamlit_status.write("Query Matches Initial Request: " + sql_explanation['is_matching'])
 
         if sql_explanation['is_matching'] == 'True':
@@ -567,8 +574,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
       logger.info("Adding Known Good SQL to Vector DB...")
       start_time = time.time()
       pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
-      sql_added_to_vector_db_duration = time.time() - start_time
-      status['sql_added_to_vector_db_duration'] = sql_added_to_vector_db_duration
+      metrics['sql_added_to_vector_db_duration'] = time.time() - start_time
       logger.info('SQL added to Vector DB')
 
   else:
