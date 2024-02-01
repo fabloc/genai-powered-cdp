@@ -1,4 +1,4 @@
-- Question: Number of users who purchased for more than $50 in total and who purchased at least 2 'Roxy' products in the last 3 months
+- Question: How many users who purchased for more than $50 in total and who purchased at least 2 'Roxy' products in the last 3 months
   SQL Query: |-
     SELECT
       APPROX_COUNT_DISTINCT(user_id) AS user_count
@@ -64,7 +64,7 @@
           AND DATE(session_day) > '2016-03-01'
       )
 
-- Question: Number of users who spent more than $1000 in total during the last 3 months
+- Question: What is the Number of users who spent more than $1000 in total during the last 3 months
   SQL Query: |-
     SELECT
       APPROX_COUNT_DISTINCT(user_id) AS user_count
@@ -79,7 +79,7 @@
         DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
       ) >= 0
 
-- Question: Number of users who spend more than $100 in 'Roxy' products in total but did not purchase any 'Roxy' product during the last 90 days
+- Question: What is the Number of users who spend more than $100 in 'Roxy' products in total but did not purchase any 'Roxy' product during the last 90 days
   SQL Query: |-
     SELECT
       APPROX_COUNT_DISTINCT(user_id) AS user_count
@@ -106,6 +106,22 @@
           daily_purchased_products_by_brands_unnested.brand_name = 'Retrofit' AND
           DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY) AND CURRENT_DATE()
       )
+- Question: How many users purchased at least 2 'Roxy' products last year?
+  SQL Query: |-
+    SELECT
+      APPROX_COUNT_DISTINCT(user_id) AS user_count
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.hll_user_aggregates`
+    WHERE
+      (
+        SELECT
+          SUM(purchased_items)
+        FROM
+          UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
+        WHERE
+          daily_purchased_products_by_brands_unnested.brand_name = 'Roxy'
+          AND DATE(session_day) BETWEEN DATE_SUB(DATE(CURRENT_DATE()), INTERVAL 1 YEAR) AND CURRENT_DATE()
+      ) >= 2
 - Question: What is the number of users who purchased one of the 5 most purchased products, during the last 3 months?
   SQL Query: |-
     SELECT
@@ -122,7 +138,10 @@
           `cdp-demo-flocquet.publisher_1_dataset.products_aggregates`
         WHERE
           DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
-        ORDER BY daily_product_purchased_items DESC
+        GROUP BY
+          product_id
+        ORDER BY
+          SUM(daily_product_purchased_items) DESC
         LIMIT 5
       ) AND
       DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
@@ -146,8 +165,11 @@
             cdp-demo-flocquet.publisher_1_dataset.products_aggregates
           WHERE
             DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH) AND CURRENT_DATE()
-          ORDER BY daily_product_purchased_items
-          DESC LIMIT 5
+          GROUP BY
+            product_id
+          ORDER BY 
+            SUM(daily_product_purchased_items) DESC
+          LIMIT 5
         ) AND
         DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH) AND CURRENT_DATE()
       GROUP BY user_id

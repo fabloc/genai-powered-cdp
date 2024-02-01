@@ -118,6 +118,8 @@ Guidelines:
   - In the generated question, stay as concise as possible while not missing any filtering and time range specified by the [SQL query].
   - In the generated question, if no time range is specified for a specific filter, consider that it is global, or total.
   - Be specific about the dates in the generated question. For example, don't say 'before 2022' but instead say 'before 2022-01-01' or 'before January 2022'.
+  - 'DATE_SUB(DATE(CURRENT_DATE()), INTERVAL 1 YEAR) AND CURRENT_DATE()' is equivalent to 'last year'.
+  - If present, make sure to explain the 'GROUP BY' statement for the top most 'SELECT' block.
   - For each attribute, use the values described in the Table Schema.
 
 [Tables Schema]:
