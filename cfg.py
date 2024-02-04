@@ -39,8 +39,7 @@ log_table_name = analytics_config['log_table_name']
 display_bq_max_results = analytics_config.getint('display_bq_max_results') if 'display_bq_max_results' in analytics_config else 100
 
 # ML Models variables
-fast_sql_generation_model = models_config['fast_sql_generation_model_id']
-fine_sql_generation_model = models_config['fine_sql_generation_model_id']
+sql_generation_model = models_config['sql_generation_model_id']
 sql_correction_model_id = models_config['sql_correction_model_id']
 validation_model_id = models_config['validation_model_id']
 embeddings_model = models_config['embeddings_model']
@@ -70,13 +69,13 @@ prompt_guidelines = f"""
     - When joining tables ensure all join columns are the same data_type.
     - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
     - For all requests not related to the number of users matching certain criteria, always use approximate count.
-    - Never use "user_id" column in the "GROUP BY" statement for the top "SELECT" block.
-    - Never use ARRAY_CONTAINS.
+    - Properties requiring time-related filtering must use columns with prefix 'daily_' filtered with 'session_day' in a 'WHERE' block, and not columns with prefix 'total_'.
+    - Never use "user_id" in the "GROUP BY" statement for the top "SELECT" block.
     - Convert TIMESTAMP to DATE.
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.
-    - Give human readable names to tables and columns in the generated SQL query.
-    - Remove ```sql and ``` from the output and generate the SQL in single line.
+    - Give meaningful names to tables and columns in the generated SQL query.
+    - Remove sql, ```sql and ``` from the output and generate the SQL in single line.
     - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
     - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
     - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.

@@ -8,18 +8,6 @@ st.set_page_config(
 
 st.title("Customer Data Platform - Segment Explorer")
 
-st.markdown(
-    """
-<style>
-    .st-emotion-cache-janbn0 {
-        flex-direction: row-reverse;
-        text-align: right;
-    }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
 if "messages" not in st.session_state:
   st.session_state.messages = []
 
@@ -46,7 +34,17 @@ if prompt := st.chat_input("How many users did not purchase anything during the 
     if generated_query['status'] == 'Success':
       response = generated_query['sql_result']
       is_audience = True if len(response.index) == 1 else False
-      message_placeholder.dataframe(response, hide_index=is_audience)
+      chart_columns = []
+      is_chart = False
+      for col in response.columns:
+        if col == 'month':
+          is_chart = True
+        else:
+          chart_columns.append(col)
+      if is_chart:
+        message_placeholder.chart(response, x='month', y=chart_columns)
+      else:
+        message_placeholder.dataframe(response, hide_index=is_audience)
       status.update(label="Request Successfully Processed", state="complete", expanded=False)
     else:
       response = generated_query['error_message']

@@ -2,7 +2,7 @@ import logging, cfg
 from vertexai.preview.generative_models import Content, Part
 from vertexai.preview.generative_models import GenerativeModel
 from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
-import json, time
+import json
 from json import JSONDecodeError
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,11 +13,8 @@ def init():
   logger = logging.getLogger('nl2sql')
 
   #vertexai.init(project=PROJECT_ID, location="us-central1")
-  global fast_sql_generation_model
-  fast_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fast_sql_generation_model)
-
-  global fine_sql_generation_model
-  fine_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fine_sql_generation_model)
+  global sql_generation_model
+  sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.sql_generation_model)
 
   #vertexai.init(project=PROJECT_ID, location="us-central1")
   global sql_correction_model
@@ -48,13 +45,13 @@ def createModel(PROJECT_ID, REGION, model_id):
   return model
 
 
-def generate_sql(model, context_prompt):
+def generate_sql(model, context_prompt, temperature = 0.0):
   if isinstance(model, GenerativeModel):
     generated_sql_json = model.generate_content(
       context_prompt,
       generation_config={
         "max_output_tokens": 1024,
-        "temperature": 0,
+        "temperature": temperature,
         "top_p": 1
     })
     generated_sql = generated_sql_json.candidates[0].content.parts[0].text
@@ -62,7 +59,7 @@ def generate_sql(model, context_prompt):
     parameters = {
         "candidate_count": 1,
         "max_output_tokens": 1024,
-        "temperature": 0,
+        "temperature": temperature,
         "top_k": 40
     }
     generated_sql_json = model.predict(
@@ -70,6 +67,16 @@ def generate_sql(model, context_prompt):
       **parameters)
     generated_sql = generated_sql_json.text
   return clean_json(generated_sql)
+
+
+
+def question_to_query_examples(similar_questions):
+  similar_questions_str = ''
+  if len(similar_questions) > 0:
+    similar_questions_str = "Good SQL Examples:\n\n"
+    for similar_question in similar_questions:
+      similar_questions_str += "    - Question:\n" + similar_question['question'] + "\n    -SQL Query:\n" + similar_question['sql_query'] + "\n\n"
+  return similar_questions_str
 
 
 def gen_dyn_rag_sql(question,table_result_joined, similar_questions, fast: bool = False):
@@ -88,10 +95,10 @@ Tables Schema:
 
 {similar_questions_str}
 
-[Question]:
-{question}
+Question:
+  {question}
 
-[SQL Generated]:
+SQL Generated:
 
     """
 
@@ -100,72 +107,59 @@ Tables Schema:
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  model = fast_sql_generation_model if fast else fine_sql_generation_model
-
-  context_query = generate_sql(model, context_prompt)
+  context_query = generate_sql(sql_generation_model, context_prompt)
 
   return context_query
 
-def sql_explain(question, generated_sql, table_schema):
+def sql_explain(question, generated_sql, table_schema, similar_questions):
 
   logger.info("Starting SQL explanation...")
 
+  response_json = {
+    "is_matching": "Answer with 'True' or 'False'",
+    "mismatch_details": "All identified errors. Be specific in the description. Don't propose a corrected SQL query. If no errors were found, return an empty string"
+  }
+
+  example_json = {
+    "is_matching": "False",
+    "mismatch_details": "'who purchased at least 5 'Roxy' products before january 2022' should be implemented using 'daily_purchased_products_by_brands.purchased_items' aggregated using SUM and filtered with a time condition on 'session_day'"
+  }
+
   context_prompt = f"""
-You are a BigQuery SQL guru. Generate a high-level question to which the [SQL Query] answers. 
+You are an AI for SQL validation. Your mission is to classify a SQL [SQL Query] as valid or invalid by performing a semantic comparison with the [Question].
+- Analyze the [Table Schema] provided below, understand the relations (column and table relations). 
+- Make sure to understand the Scope of each column, which can be 'daily' or 'global', as specified in their description in the [Table Schema].
 
-Guidelines:
-  - Analyze the database and the table schema provided as parameters and understand the relations (column and table relations) and the column descriptions.
-  - In the generated question, stay as concise as possible while not missing any filtering and time range specified by the [SQL query].
-  - In the generated question, if no time range is specified for a specific filter, consider that it is global, or total.
-  - Be specific about the dates in the generated question. For example, don't say 'before 2022' but instead say 'before 2022-01-01' or 'before January 2022'.
-  - 'DATE_SUB(DATE(CURRENT_DATE()), INTERVAL 1 YEAR) AND CURRENT_DATE()' is equivalent to 'last year'.
-  - If present, make sure to explain the 'GROUP BY' statement for the top most 'SELECT' block.
-  - For each attribute, use the values described in the Table Schema.
-
-[Tables Schema]:
+[Table Schema]:
 {table_schema}
+
+[Validation Steps]:
+1. Scan the [Question] and extract all the properties with their associated filters. In particular, understand specific time filters. Classify every property: 'global' (if there is an explicit 'global' or 'in total' in the [Question] or by default no time filter) or 'time-bound' otherwise.
+2. For each classified property, identify how it is implemented in the [SQL Query] and make sure that the right columns with the correct scope are used: 'global' columns for 'global' properties and aggregated 'daily' columns.
+3. If a column with 'daily' scope is present in the [SQL Query], it should be aggregated using SUM, COUNT, etc., and filtered using 'session_day' with time conditions in a 'WHERE' block. 
+4. Answer using the following json format: {json.dumps(response_json)}
+5. Always use double quotes "" for json property names and values in the returned json object.
+6. Remove ```json prefix and ``` suffix from the outputs.
+
+Here is an example of an SQL Query with a Question and the Evaluation of whether the SQL Query matches the Question:
+
+Remember that before you answer a question, you must check to see if it complies with your mission above.
 
 [SQL Query]:
 {generated_sql}
+
+[Question]:
+{question}
+
+[Evaluation]:
+
 """
 
   logger.debug('Validation - Question Generation from SQL Prompt: \n' + context_prompt)
 
-  generated_question = generate_sql(validation_model, context_prompt)
-
-  response_json = {
-    "is_matching": "{Answer with 'True' or 'False' depending on the outcome of the comparison between the provided Query and the Reference Question}",
-    "mismatch_details": "{Write all identified missing or incorrect filters from the Query. If not, return an empty string. Be specific when highlighting a difference, and provide ways to modify the Query to match the Reference Question.}"
-  }
-
-  logger.info("Completed SQL explanation.")
-
-  logger.info("Starting SQL validation...")
-
-  context_prompt = f"""
-Compare a Query to a Reference Question and assess whether they are equivalent or not and how the Query should be modified to match the Reference Question.
-The question is related to marketing data, so be mindful about equivalent terms. For example, 'customer' and 'user' are equivalent, 'items' and 'products' are equivalent.
-
-
-[Guidelines]:
-- Be careful with date comparison. For example, 'before August', 'before 2023-08-01', 'before August 1, 2023' and 'before August 1st, 2023' are all equivalent. 
-- Answer using the following json format:
-{response_json}
-- Remove ```json prefix and ``` suffix from the outputs.
-- Use double quotes "" for json property names and values in the returned json object.
-
-[Reference Question]:
-{question}
-
-[Query]:
-{generated_question}
-"""
-
-  logger.debug('Validation - Question Comparison Prompt: \n' + context_prompt)
-
   try:
 
-    sql_explanation = generate_sql(validation_model, context_prompt)
+    sql_explanation = generate_sql(validation_model, context_prompt, temperature = 0.8)
     logger.info("Validation completed with status: \n" + sql_explanation)
     validation_json = json.loads(sql_explanation, strict=False)
 
@@ -177,9 +171,6 @@ The question is related to marketing data, so be mindful about equivalent terms.
     logger.error("Exception: " + str(e))
     sql_explanation['is_matching'] = 'False'
     sql_explanation['mismatch_details'] = 'Undefined error. Retry'
-
-
-  validation_json['generated_question'] = generated_question
 
   return validation_json
 
@@ -214,105 +205,45 @@ class SQLCorrectionChat(SessionChat):
 
   sql_correction_context = f"""
 
-      You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
-      As the user provides versions of the query and the errors with the SQL Query, return a never seen alternative SQL query that fixes the errors.
-      It is important that the query still answers the original question and follows the following guidelines:
+You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
+As the user provides versions of the query and the errors with the SQL Query, return a never seen alternative SQL query that fixes the errors.
+It is important that the query still answers the original question and follows the following guidelines:
 
-      Guidelines:
-      {cfg.prompt_guidelines}
+Guidelines:
+{cfg.prompt_guidelines}
 
-      Please reply 'YES' if you understand.
+Please reply 'YES' if you understand.
     """
    
   def __init__(self):
       super().__init__(sql_correction_model, self.sql_correction_context)
 
-  def get_chat_response(self, table_schema, similar_questions, question, generated_sql, error_msg):
+  def get_chat_response(self, table_schema, similar_questions, question, generated_sql, bq_error_msg, validation_error_msg):
+
+
+    error_msg = ('- ' + bq_error_msg if bq_error_msg != None else '') + ('\n- ' + validation_error_msg if validation_error_msg != None else '')
 
     context_prompt = f"""
-      What is an alternative SQL statement to address the Error Message mentioned below?
-      Present a different SQL from previous ones. It is important that the query still answer the original question.
-      Do not repeat suggestions.
+What is an alternative SQL statement to address the Error Messages mentioned below?
+Present a different SQL from previous ones. It is important that the query still answer the original question.
+Do not repeat suggestions.
 
-    Question:
-    {question}
+Question:
+{question}
 
-    Previously Generated (bad) SQL Query:
-    {generated_sql}
+Previously Generated (bad) SQL Query:
+{generated_sql}
 
-    Error Message:
-    {error_msg}
+Error Messages:
+{error_msg}
 
-    Tables Schema:
-    {table_schema}
+Tables Schema:
+{table_schema}
 
-    {question_to_query_examples(similar_questions)}
+{question_to_query_examples(similar_questions)}
     """
 
     logger.debug('SQL Correction Chat Prompt: \n' + context_prompt)
-
-    response = super().get_chat_response(context_prompt)
-
-    return clean_sql(str(response))
-
-
-def question_to_query_examples(similar_questions):
-  similar_questions_str = ''
-  if len(similar_questions) > 0:
-    similar_questions_str = "Good SQL Examples:\n\n"
-    for similar_question in similar_questions:
-      similar_questions_str += "    [Question]:\n" + similar_question['question'] + "\n    [SQL Query]:\n" + similar_question['sql_query'] + "\n\n"
-  return similar_questions_str
-
-
-class ExplanationCorrectionChat(SessionChat):
-
-  not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
-
-  explanation_correction_context = f"""
-      You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
-      The user provides versions of the (bad) SQL Query with the Original Question it is answering, the question that the (bad) SQL query actually answers to and details of why the (bad) SQL Query does not correctly answers the Original Question.
-      Generate a never seen alternative SQL query that answers better the Original Question by correcting the issues highlighted for the previous version of the (bad) SQL query.
-
-      Guidelines:
-      {cfg.prompt_guidelines}
-
-      Please reply 'YES' if you understand.
-    """
-   
-  def __init__(self):
-      super().__init__(sql_correction_model, self.explanation_correction_context)
-
-  def get_chat_response(self, table_schema, similar_questions, question, generated_sql, generated_explanation, error_msg):
-
-    similar_questions_str = question_to_query_examples(similar_questions)
-
-    context_prompt = f"""
-      What is an alternative SQL Query to address the errors mentioned below?
-      Present a different SQL Query from previous ones. It is important that the query be corrected to answer the Original Question.
-      Do not repeat suggestions.
-
-      [Table Schema]:
-      {table_schema}
-
-      {similar_questions_str}
-
-      [Original Question]:
-          {question}
-
-      [Generated (bad) SQL Query]:
-          {generated_sql}
-
-      [Question answered by the Generated (bad) SQL Query]:
-          {generated_explanation}
-
-      [(bad) SQL Query Issues]:
-          {error_msg}
-
-      [Corrected SQL Query]:
-
-    """
-    logger.debug('SQL Validation Correction Chat Prompt: \n' + context_prompt)
 
     response = super().get_chat_response(context_prompt)
 
