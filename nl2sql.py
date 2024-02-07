@@ -395,10 +395,10 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
       status['bq_status'],_ = future_test_plan.result()
       streamlit_status.write("SQL Query Syntax Check: " + status['bq_status']['status'])
       sql_explanation = future_sql_validation.result()
-      streamlit_status.write("SQL Query Matches Initial Request: " + sql_explanation['is_matching'])
+      streamlit_status.write("SQL Query Matches Initial Request: " + str(sql_explanation['is_matching']))
 
       # If BigQuery validation AND Query semantic validation were both successful : SQL was correctly generated.
-      if status['bq_status']['status'] == 'Success' and sql_explanation['is_matching'] == 'True':
+      if status['bq_status']['status'] == 'Success' and sql_explanation['is_matching'] == True:
 
         status['sql_generation_success'] = True
         workflow['stop_loop'] = True
@@ -459,7 +459,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
       logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
       status['status'] = 'Error'
       status['error_messages'] = ('BigQuery errors: ' + status['bq_status']['error_message'] if status['bq_status']['status'] != 'Success' else '') \
-            + ('Semantic Validation Errors: ' + sql_explanation['mismatch_details'] if sql_explanation['is_matching'] == 'False' else '')
+            + ('Semantic Validation Errors: ' + sql_explanation['mismatch_details'] if sql_explanation['is_matching'] == False else '')
 
     # If SQL query was successfully generated and tested on BigQuery, proceed with query validation
     else:

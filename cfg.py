@@ -71,10 +71,12 @@ prompt_guidelines = f"""
     - For all requests not related to the number of users matching certain criteria, always use approximate count.
     - Properties requiring time-related filtering must use columns with prefix 'daily_' filtered with 'session_day' in a 'WHERE' block, and not columns with prefix 'total_'.
     - Never use "user_id" in the "GROUP BY" statement for the top "SELECT" block.
+    - Never use the 'ARRAY_FILTER' function.
+    - Never use the 'DISTINCT_AGG' function.
     - Convert TIMESTAMP to DATE.
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.
-    - Give meaningful names to tables and columns in the generated SQL query.
+    - Give human readable names to tables and columns in the generated SQL query, in lowercase.
     - Remove sql, ```sql and ``` from the output and generate the SQL in single line.
     - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
     - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.

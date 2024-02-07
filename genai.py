@@ -3,6 +3,7 @@ from vertexai.preview.generative_models import Content, Part
 from vertexai.preview.generative_models import GenerativeModel
 from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
 import json
+import jsonschema
 from json import JSONDecodeError
 from concurrent.futures import ThreadPoolExecutor
 
@@ -116,32 +117,68 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
   logger.info("Starting SQL explanation...")
 
   response_json = {
-    "is_matching": "Answer with 'True' or 'False'",
-    "mismatch_details": "All identified errors. Be specific in the description. Don't propose a corrected SQL query. If no errors were found, return an empty string"
+    "filters": [{
+        "name": "Name of each filter",
+        "classification": "classification of the filter",
+        "columns": [{
+          "name": "name of each column used to implement the filter in \[SQL Query\]",
+          "scope": "Scope of the column"
+        }]
+    }],
+    "unneeded_filter": [
+      "List of names of each filter in natural language that are present in \[SQL Query\] and are not matching an identified filter in \[Question\]"
+    ]
   }
 
-  example_json = {
-    "is_matching": "False",
-    "mismatch_details": "'who purchased at least 5 'Roxy' products before january 2022' should be implemented using 'daily_purchased_products_by_brands.purchased_items' aggregated using SUM and filtered with a time condition on 'session_day'"
+  schema = {
+    "$schema": "https://json-schema.org/draft/2019-09/schema",
+    "type": "object",
+    "properties": {
+      "filters": {
+        "type": "array",
+        "items": {
+          "name": {"type": "string"},
+          "classification": {"type": "string"},
+          "columns": {
+            "type": "array",
+            "items": {
+              "name": {"type": "string"},
+              "scope": {"type": "string"},
+            }
+          },
+          "required": ["name", "classification", "columns"]
+        }
+      },
+      "unneeded_filter": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    },
+    "required": ["filters"]
+  }
+
+  sql_explanation = {
+    "is_matching": True,
+    "mismatch_details": ''
   }
 
   context_prompt = f"""
-You are an AI for SQL validation. Your mission is to classify a SQL [SQL Query] as valid or invalid by performing a semantic comparison with the [Question].
-- Analyze the [Table Schema] provided below, understand the relations (column and table relations). 
-- Make sure to understand the Scope of each column, which can be 'daily' or 'global', as specified in their description in the [Table Schema].
+You are an AI for SQL Analysis. Your mission is to analyse a SQL [SQL Query] and identify how its different parts answer a [Question].
+You will reply only with a json object as described in the [Analysis Steps].
 
 [Table Schema]:
 {table_schema}
 
-[Validation Steps]:
-1. Scan the [Question] and extract all the properties with their associated filters. In particular, understand specific time filters. Classify every property: 'global' (if there is an explicit 'global' or 'in total' in the [Question] or by default no time filter) or 'time-bound' otherwise.
-2. For each classified property, identify how it is implemented in the [SQL Query] and make sure that the right columns with the correct scope are used: 'global' columns for 'global' properties and aggregated 'daily' columns.
-3. If a column with 'daily' scope is present in the [SQL Query], it should be aggregated using SUM, COUNT, etc., and filtered using 'session_day' with time conditions in a 'WHERE' block. 
-4. Answer using the following json format: {json.dumps(response_json)}
-5. Always use double quotes "" for json property names and values in the returned json object.
-6. Remove ```json prefix and ``` suffix from the outputs.
-
-Here is an example of an SQL Query with a Question and the Evaluation of whether the SQL Query matches the Question:
+[Analysis Steps]:
+Let's work this out step by step to make sure we have the right answer:
+1. Analyze the tables in [Table Schema], and understand the relations (column and table relations).
+2. For each column in each table of [Table Schema], find its scope in its description (format: 'Scope: (time-dependent|global)').
+3. Parse the [Question] and identify all the filters required by the question. Make sure to identify all time constraints related to each filter.
+4. Classify each filter: 'time-dependent' if time constraints are explicitly given in the [Question] or 'global' otherwise. Some examples: the filter 'purchased for more than $55 in total' has classification 'global' - the filter 'purchased at least 1 Decathlon product in the last 3 months' has classification 'time-dependent'.
+5. For each filter, trace back all the columns only part of [Table Schema] used to implement it in [SQL Query]. It's important to stick to the columns described in [Table Schema]. Make sure to prefix the column with the appropriate structure name if needed. For example, the column 'purchased_items' can belong to the structure 'total_products_purchased_by_brands' which has a 'global' scope and should be noted 'total_products_purchased_by_brands.purchased_items', or belong to the structure 'daily_products_purchased_by_brands' which has 'time-dependent' scope and should be noted 'daily_products_purchased_by_brands.purchased_items'.
+6. Answer using only the following json format: {json.dumps(response_json)}
+7. Always use double quotes "" for json property names and values in the returned json object.
+8. Remove ```json prefix and ``` suffix from the outputs. Don't add any comment around the returned json.
 
 Remember that before you answer a question, you must check to see if it complies with your mission above.
 
@@ -159,20 +196,42 @@ Remember that before you answer a question, you must check to see if it complies
 
   try:
 
-    sql_explanation = generate_sql(validation_model, context_prompt, temperature = 0.8)
-    logger.info("Validation completed with status: \n" + sql_explanation)
-    validation_json = json.loads(sql_explanation, strict=False)
+    raw_json = generate_sql(validation_model, context_prompt)
+    logger.info("Validation completed with status: \n" + raw_json)
+    validation_json = json.loads(raw_json, strict=False)
+
+    # Validate JSON against JSON schema
+    jsonschema.validate(validation_json, schema = schema)
+
+    # Analyze results for possible mismatch in SQL Query implementation
+    for filter in validation_json['filters']:
+      for column in filter['columns']:
+        if column['scope'] != filter['classification']:
+          sql_explanation['is_matching'] = 'False'
+          sql_explanation['mismatch_details'] += "- Filter \"" + filter['name'] + "\" with scope '" + filter['classification'] + "' is implemented using column '" + column['name'] + "' with scope '" + column['scope'] + "'. A column with scope '" + ('time-dependent' if column['scope'] == 'global' else 'global') + "' should be used instead.\n"
+
+    if len(validation_json['unneeded_filter']) > 0:
+      sql_explanation["is_matching"] = False
+      sql_explanation["mismatch_details"] += "- The SQL Query implements the following filters which are not requested by the question: " + ", ".join(validation_json['unneeded_filter'] + 'n')
 
   except JSONDecodeError as e:
-    logger.error("Error while deconding JSON response:: " + str(e))
+    logger.error("Error while deconding JSON response: " + str(e))
     sql_explanation['is_matching'] = 'False'
     sql_explanation['mismatch_details'] = 'Returned JSON malformed'
+  except jsonschema.exceptions.ValidationError as e:
+    logger.error("JSON Response does not match expected JSON schema: " + str(e))
+    sql_explanation['is_matching'] = 'False'
+    sql_explanation['mismatch_details'] = 'Returned JSON malformed'
+  except jsonschema.exceptions.SchemaError as e:
+    logger.error("Invalid JSON Schema !")
   except Exception as e:
     logger.error("Exception: " + str(e))
     sql_explanation['is_matching'] = 'False'
     sql_explanation['mismatch_details'] = 'Undefined error. Retry'
 
-  return validation_json
+  logger.info("Validation response analysis: \n" + json.dumps(sql_explanation))
+
+  return sql_explanation
 
 
 class SessionChat:
