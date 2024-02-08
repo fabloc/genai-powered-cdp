@@ -77,7 +77,7 @@ prompt_guidelines = f"""
     - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
     - Don't include any comments in code.
     - Give human readable names to tables and columns in the generated SQL query, in lowercase.
-    - Remove sql, ```sql and ``` from the output and generate the SQL in single line.
+    - Remove 'sql' prefix, ```sql and ``` from the output and generate the SQL in single line.
     - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
     - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
     - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.

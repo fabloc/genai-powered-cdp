@@ -122,11 +122,12 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
         "classification": "classification of the filter",
         "columns": [{
           "name": "name of each column used to implement the filter in \[SQL Query\]",
-          "scope": "Scope of the column"
+          "scope": "Scope of the column",
+          "is_relevant": "True if the column is appropriate to implement the filter, False otherwise"
         }]
     }],
     "unneeded_filter": [
-      "List of names of each filter in natural language that are present in \[SQL Query\] and are not matching an identified filter in \[Question\]"
+      "Names of each filter in natural language that are present in \[SQL Query\] and are not matching any classified filter in \[Question\]"
     ]
   }
 
@@ -144,6 +145,7 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
             "items": {
               "name": {"type": "string"},
               "scope": {"type": "string"},
+              "is_relevant": {"type": "boolean"},
             }
           },
           "required": ["name", "classification", "columns"]
@@ -208,11 +210,11 @@ Remember that before you answer a question, you must check to see if it complies
       for column in filter['columns']:
         if column['scope'] != filter['classification']:
           sql_explanation['is_matching'] = 'False'
-          sql_explanation['mismatch_details'] += "- Filter \"" + filter['name'] + "\" with scope '" + filter['classification'] + "' is implemented using column '" + column['name'] + "' with scope '" + column['scope'] + "'. A column with scope '" + ('time-dependent' if column['scope'] == 'global' else 'global') + "' should be used instead.\n"
+          sql_explanation['mismatch_details'] += "- \"" + filter['name'] + "\" is implemented using column '" + column['name'] + "' with scope '" + column['scope'] + "'. Use a column with scope '" + ('time-dependent' if column['scope'] == 'global' else 'global') + "' instead.\n"
 
     if len(validation_json['unneeded_filter']) > 0:
       sql_explanation["is_matching"] = False
-      sql_explanation["mismatch_details"] += "- The SQL Query implements the following filters which are not requested by the question: " + ", ".join(validation_json['unneeded_filter'] + 'n')
+      sql_explanation["mismatch_details"] += "- The SQL Query implements the following logic which is not requested by the question: \"" + ("\", \"".join(validation_json['unneeded_filter']) + "\"\n")
 
   except JSONDecodeError as e:
     logger.error("Error while deconding JSON response: " + str(e))
@@ -280,10 +282,10 @@ Please reply 'YES' if you understand.
   def get_chat_response(self, table_schema, similar_questions, question, generated_sql, bq_error_msg, validation_error_msg):
 
 
-    error_msg = ('- ' + bq_error_msg if bq_error_msg != None else '') + ('\n- ' + validation_error_msg if validation_error_msg != None else '')
+    error_msg = ('- Syntax error returned from BigQuery: ' + bq_error_msg if bq_error_msg != None else '') + ('\n' + validation_error_msg if validation_error_msg != None else '')
 
     context_prompt = f"""
-What is an alternative SQL statement to address the Error Messages mentioned below?
+What is an alternative SQL statement to address the errors mentioned below?
 Present a different SQL from previous ones. It is important that the query still answer the original question.
 Do not repeat suggestions.
 
@@ -296,10 +298,13 @@ Previously Generated (bad) SQL Query:
 Error Messages:
 {error_msg}
 
-Tables Schema:
+Table Schema:
 {table_schema}
 
 {question_to_query_examples(similar_questions)}
+
+New Generated SQL Query:
+
     """
 
     logger.debug('SQL Correction Chat Prompt: \n' + context_prompt)
