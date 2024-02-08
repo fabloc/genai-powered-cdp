@@ -13,11 +13,12 @@ def init():
   global logger
   logger = logging.getLogger('nl2sql')
 
-  #vertexai.init(project=PROJECT_ID, location="us-central1")
-  global sql_generation_model
-  sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.sql_generation_model)
+  global fast_sql_generation_model
+  fast_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fast_sql_generation_model)
 
-  #vertexai.init(project=PROJECT_ID, location="us-central1")
+  global fine_sql_generation_model
+  fine_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fine_sql_generation_model)
+
   global sql_correction_model
   sql_correction_model = createModel(cfg.project_id, "us-central1", cfg.sql_correction_model_id)
 
@@ -69,8 +70,6 @@ def generate_sql(model, context_prompt, temperature = 0.0):
     generated_sql = generated_sql_json.text
   return clean_json(generated_sql)
 
-
-
 def question_to_query_examples(similar_questions):
   similar_questions_str = ''
   if len(similar_questions) > 0:
@@ -80,9 +79,15 @@ def question_to_query_examples(similar_questions):
   return similar_questions_str
 
 
-def gen_dyn_rag_sql(question,table_result_joined, similar_questions, fast: bool = False):
+def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
 
   similar_questions_str = question_to_query_examples(similar_questions)
+
+  # If no similar question found, use more performant model to generate SQL Query (yet much slower)
+  if fast := (len(similar_questions) > 0):
+    logger.info("Similar question found, using fast model to generate SQL Query")
+  else:
+    logger.info("No similar question found, using fine model to generate SQL Query")
 
   not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
   context_prompt = f"""
@@ -108,7 +113,7 @@ SQL Generated:
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  context_query = generate_sql(sql_generation_model, context_prompt)
+  context_query = generate_sql(fast_sql_generation_model if fast is True else fine_sql_generation_model, context_prompt)
 
   return context_query
 

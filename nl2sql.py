@@ -174,7 +174,7 @@ def init_table_and_columns_desc():
       pgvector_handler.add_table_desc_2_pgvector(table_comments_df)
 
     # Look for files listing sample queries to be ingested in the pgVector DB
-    # insert_sample_queries_lookup(tables_list)
+    insert_sample_queries_lookup(tables_list)
 
 
 # Build a custom "detailed_description" table column to be indexed by the Vector DB
@@ -342,7 +342,10 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     similar_questions = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
 
     metrics['similar_questions_duration'] = time.time() - start_time
-    logger.info("Found similar questions:\n" + str(similar_questions))
+    if len(similar_questions) == 0:
+      logger.info("No similar questions found...")
+    else:
+      logger.info("Similar questions found:\n" + str(similar_questions))
 
     error_correction_chat_session=None
     logger.info("Now looking for appropriate tables in Vector to answer the question...")

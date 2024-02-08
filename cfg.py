@@ -39,7 +39,8 @@ log_table_name = analytics_config['log_table_name']
 display_bq_max_results = analytics_config.getint('display_bq_max_results') if 'display_bq_max_results' in analytics_config else 100
 
 # ML Models variables
-sql_generation_model = models_config['sql_generation_model_id']
+fast_sql_generation_model = models_config['fast_sql_generation_model_id']
+fine_sql_generation_model = models_config['fine_sql_generation_model_id']
 sql_correction_model_id = models_config['sql_correction_model_id']
 validation_model_id = models_config['validation_model_id']
 embeddings_model = models_config['embeddings_model']

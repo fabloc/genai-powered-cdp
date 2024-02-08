@@ -61,7 +61,7 @@
           UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
         WHERE
           daily_purchased_products_by_brands_unnested.brand_name = 'Retrofit'
-          AND DATE(session_day) > '2016-03-01'
+          AND DATE(session_day) > '2023-08-01'
       )
 
 - Question: What is the Number of users who spent more than $1000 in total during the last 3 months
