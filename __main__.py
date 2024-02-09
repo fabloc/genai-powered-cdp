@@ -1,4 +1,5 @@
 import streamlit as st
+import altair as alt
 import nl2sql
 
 st.set_page_config(
@@ -34,15 +35,17 @@ if prompt := st.chat_input("How many users did not purchase anything during the 
     if generated_query['status'] == 'Success':
       response = generated_query['sql_result']
       is_audience = True if len(response.index) == 1 else False
-      chart_columns = []
-      is_chart = False
-      for col in response.columns:
-        if col == 'month':
-          is_chart = True
-        else:
-          chart_columns.append(col)
-      if is_chart:
-        message_placeholder.chart(response, x='month', y=chart_columns)
+      date_col = response.select_dtypes(include=['dbdate'])
+      if len(date_col.columns) == 1:
+        is_chart = True
+        chart_columns = []
+        for col in response.columns:
+          if col != date_col.columns[0]:
+            chart_columns.append(col)
+        c = (
+          alt.Chart(response.rename(columns={date_col.columns[0]:'index'}).set_index('index')).mark_line().encode(x = 'index', y = chart_columns[0])
+        )
+        message_placeholder.altair_chart(c)
       else:
         message_placeholder.dataframe(response, hide_index=is_audience)
       status.update(label="Request Successfully Processed", state="complete", expanded=False)

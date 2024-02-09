@@ -77,9 +77,9 @@
         UNNEST(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands_unnested
       WHERE
         DATE(session_day) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH) AND CURRENT_DATE()
-      ) >= 0
+      ) >= 1000
 
-- Question: What is the Number of users who spend more than $100 in 'Roxy' products in total but did not purchase any 'Roxy' product during the last 90 days
+- Question: What is the Number of users who spend more than $100 in 'Roxy' products in total but did not purchase any 'Retrofit' product during the last 90 days
   SQL Query: |-
     SELECT
       APPROX_COUNT_DISTINCT(user_id) AS user_count

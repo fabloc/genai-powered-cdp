@@ -30,13 +30,13 @@ sql_max_error_retry = execution_config.getint('sql_max_error_retry')
 sql_max_explanation_retry = execution_config.getint('sql_max_explanation_retry')
 auto_add_knowngood_sql = execution_config.getboolean('auto_add_knowngood_sql')
 execute_final_sql = execution_config.getboolean('execute_final_sql')
+display_bq_max_results = execution_config.getint('display_bq_max_results') if 'display_bq_max_results' in execution_config else 100
 
 # Analytics variables
 enable_analytics = analytics_config.getboolean('enable_analytics')
 dataset_name = analytics_config['dataset_name']
 dataset_location = analytics_config['dataset_location']
 log_table_name = analytics_config['log_table_name']
-display_bq_max_results = analytics_config.getint('display_bq_max_results') if 'display_bq_max_results' in analytics_config else 100
 
 # ML Models variables
 fast_sql_generation_model = models_config['fast_sql_generation_model_id']

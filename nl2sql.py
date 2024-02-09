@@ -1,5 +1,6 @@
 # Common Imports
 import pandas_gbq
+import pandas as pd
 import pgvector_handler
 import os, json, time, yaml, sys
 import logging.config
@@ -377,7 +378,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
             generated_sql=generated_sql + ' ROWID'
     else:
         workflow['stop_loop']=True
-        workflow['unrelated_question']=True
+        status['unrelated_question']=True
         status['sql_generation_success'] = False
         logger.info('No ANN/appropriate tables found in Vector to answer the question. Stopping...')
 
@@ -453,16 +454,17 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
       if status['unrelated_question'] is True:
         logger.info('Question cannot be answered using this dataset!')
         status['error'] = 'Error'
+        status['error_message'] = 'Question cannot be answered using this dataset!'
         # append_2_bq_result = bigquery_handler.append_2_bq(
         #   cfg.model_id,
         #   question,
         #   'Question cannot be answered using this dataset!',
         #   'N', 'N', 'unrelated_question', '')
-
-      logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
-      status['status'] = 'Error'
-      status['error_messages'] = ('BigQuery errors: ' + status['bq_status']['error_message'] if status['bq_status']['status'] != 'Success' else '') \
-            + ('Semantic Validation Errors: ' + sql_explanation['mismatch_details'] if sql_explanation['is_matching'] == False else '')
+      else:
+        logger.info("Can't find a correct SQL Query that matches exactly the initial questions.")
+        status['status'] = 'Error'
+        status['error_message'] = ('BigQuery errors: ' + status['bq_status']['error_message'] if status['bq_status']['status'] != 'Success' else '') \
+              + ('Semantic Validation Errors: ' + sql_explanation['mismatch_details'] if sql_explanation['is_matching'] == False else '')
 
     # If SQL query was successfully generated and tested on BigQuery, proceed with query validation
     else:
@@ -515,6 +517,11 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     status['status'] = 'Success'
 
   if sql_result_df is not None:
+    # Convert dates columns into datetime dtype, so that they can be easily identified in the UI part
+    sql_result_df = sql_result_df.apply(lambda col: pd.to_datetime(col, errors='ignore') 
+        if col.dtypes == object 
+        else col, 
+        axis=0)
     if 'hll_user_aggregates' in matched_tables:
       if sql_result_df.empty is not True:
         sql_result_df.reset_index(drop=True)

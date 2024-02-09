@@ -33,11 +33,11 @@ def createModel(PROJECT_ID, REGION, model_id):
 
   if model_id == 'code-bison-32k':
     model = CodeGenerationModel.from_pretrained(model_id)
-  elif model_id == 'gemini-pro':
+  elif 'gemini-pro' in model_id:
     model = GenerativeModel(model_id)
   elif model_id == 'codechat-bison-32k':
     model = CodeChatModel.from_pretrained(model_id)
-  elif model_id == 'chat-bison-32k':
+  elif 'chat-bison-32k' in model_id:
     model = ChatModel.from_pretrained(model_id)
   elif model_id == 'text-unicorn':
     model = TextGenerationModel.from_pretrained(model_id)
@@ -123,16 +123,16 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
 
   response_json = {
     "filters": [{
-        "name": "Name of each filter",
+        "name": "List all [Filters]",
         "classification": "classification of the filter",
         "columns": [{
-          "name": "name of each column used to implement the filter in \[SQL Query\]",
+          "name": "Name of every column from [SQL Query] implementing the filter, from [Table Schema]",
           "scope": "Scope of the column",
-          "is_relevant": "True if the column is appropriate to implement the filter, False otherwise"
+          "is_relevant": "True if the column is correctly implementing the filter, False otherwise"
         }]
     }],
-    "unneeded_filter": [
-      "Names of each filter in natural language that are present in \[SQL Query\] and are not matching any classified filter in \[Question\]"
+    "mismatch_details": [
+      "Describe in natural language in a few words the columns from the [SQL Query] that implements logic not requested by [Filters]"
     ]
   }
 
@@ -180,9 +180,9 @@ You will reply only with a json object as described in the [Analysis Steps].
 Let's work this out step by step to make sure we have the right answer:
 1. Analyze the tables in [Table Schema], and understand the relations (column and table relations).
 2. For each column in each table of [Table Schema], find its scope in its description (format: 'Scope: (time-dependent|global)').
-3. Parse the [Question] and identify all the filters required by the question. Make sure to identify all time constraints related to each filter.
-4. Classify each filter: 'time-dependent' if time constraints are explicitly given in the [Question] or 'global' otherwise. Some examples: the filter 'purchased for more than $55 in total' has classification 'global' - the filter 'purchased at least 1 Decathlon product in the last 3 months' has classification 'time-dependent'.
-5. For each filter, trace back all the columns only part of [Table Schema] used to implement it in [SQL Query]. It's important to stick to the columns described in [Table Schema]. Make sure to prefix the column with the appropriate structure name if needed. For example, the column 'purchased_items' can belong to the structure 'total_products_purchased_by_brands' which has a 'global' scope and should be noted 'total_products_purchased_by_brands.purchased_items', or belong to the structure 'daily_products_purchased_by_brands' which has 'time-dependent' scope and should be noted 'daily_products_purchased_by_brands.purchased_items'.
+3. Analyze the [Question] and break it down into a list of [Filters]. Make sure to associate the correct time constraints to each filter. For example the question "Give me 5 brands at random from the top 100 selling brands" has [Filters] = ["random selection of 5 brands", "top 100 selling brands"] - the question "Number of users with age under 35, who have already bought 'Decathlon' brand products, but not after '2023-08-01'" has the [Filters] = ["age under 35", "purchased at least 1 'Decathlon' brand product", "has not purchased a 'Decathlon' brand product after '2023-08-01'"] - question "Number of users with age under 35, located in France, and who have already bought 'Decathlon' brand products, before August 2023" has [Filters] = ["age under 35", "located in France", "has purchased 'Decathlon' brand product before August 2023"].
+4. Classify each filter in [Filters]: 'time-dependent' or 'global'. For example: the filter 'purchased for more than $55 in total' has classification 'global' - the filter 'purchased at least 1 Decathlon product in the last 3 months' has classification 'time-dependent'.
+5. For each filter in [Filters], trace back all the matching columns present in [SQL Query] and also part of [Table Schema]. Make sure to prefix the column with the appropriate structure if needed. For example, the column 'purchased_items' can belong to the structure 'total_products_purchased_by_brands' which has a 'global' scope and should be noted 'total_products_purchased_by_brands.purchased_items', or belong to the structure 'daily_products_purchased_by_brands' which has 'time-dependent' scope and should be noted 'daily_products_purchased_by_brands.purchased_items'.
 6. Answer using only the following json format: {json.dumps(response_json)}
 7. Always use double quotes "" for json property names and values in the returned json object.
 8. Remove ```json prefix and ``` suffix from the outputs. Don't add any comment around the returned json.
@@ -216,10 +216,13 @@ Remember that before you answer a question, you must check to see if it complies
         if column['scope'] != filter['classification']:
           sql_explanation['is_matching'] = 'False'
           sql_explanation['mismatch_details'] += "- \"" + filter['name'] + "\" is implemented using column '" + column['name'] + "' with scope '" + column['scope'] + "'. Use a column with scope '" + ('time-dependent' if column['scope'] == 'global' else 'global') + "' instead.\n"
+        if column['is_relevant'] == False:
+          sql_explanation['is_matching'] = 'False'
+          sql_explanation["mismatch_details"] += "- The column '" + column['name'] + "' is either not relevant or not used correctly to implement the filter '" + filter['name'] + "'.\n"
 
-    if len(validation_json['unneeded_filter']) > 0:
+    if len(validation_json['mismatch_details']) > 0:
       sql_explanation["is_matching"] = False
-      sql_explanation["mismatch_details"] += "- The SQL Query implements the following logic which is not requested by the question: \"" + ("\", \"".join(validation_json['unneeded_filter']) + "\"\n")
+      sql_explanation["mismatch_details"] += "- The SQL Query has the following implementation errors: \"" + ("\", \"".join(validation_json['mismatch_details']) + "\"\n")
 
   except JSONDecodeError as e:
     logger.error("Error while deconding JSON response: " + str(e))
