@@ -175,7 +175,7 @@ def init_table_and_columns_desc():
       pgvector_handler.add_table_desc_2_pgvector(table_comments_df)
 
     # Look for files listing sample queries to be ingested in the pgVector DB
-    insert_sample_queries_lookup(tables_list)
+    # insert_sample_queries_lookup(tables_list)
 
 
 # Build a custom "detailed_description" table column to be indexed by the Vector DB
@@ -229,17 +229,16 @@ def build_table_desc(table_comments_df,columns_df,pkeys_df,fkeys_df):
     else:
       final_fk_cols = ",".join(table_fk_cols)
 
-    ln = ' |\n    '
+    ln = ' \n  '
     aug_table_desc=f"""
-    Table: `{cur_full_table}`
-    Owner: {cur_table_owner}
-    Column (type) - Description - Scope:
-    {ln.join(table_cols)}
-    Primary Key: {final_pk_cols}
-    Foreign Keys: {final_fk_cols}
-    Project_id: {str(row_aug['project_id'])}
-    Table Description: {str(row_aug['comments'])}
-    """
+  Table: `{cur_full_table}`
+  Owner: {cur_table_owner}
+  Columns:
+  {ln.join(table_cols)}
+  Primary Key: {final_pk_cols}
+  Foreign Keys: {final_fk_cols}
+  Project_id: {str(row_aug['project_id'])}
+  Table Description: {str(row_aug['comments'])}"""
 
     # Works well
     aug_table_comments_df.at[index_aug, 'detailed_description'] = aug_table_desc

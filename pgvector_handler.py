@@ -384,7 +384,8 @@ def get_tables_colums_vector(question, question_text_embedding):
 
     table_results = connection_mgr.execute_query(table_sql)
 
+    table_results_array = []
     for r in table_results:
-        table_results_joined = table_results_joined + r[1] + '\n'
+        table_results_array.append(r[1])
 
-    return table_results_joined
+    return '\n'.join(table_results_array)

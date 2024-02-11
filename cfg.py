@@ -64,28 +64,26 @@ operator =  vector_config['operator']  # ["vector_cosine_ops", "vector_l2_ops", 
 
 # Prompt Configuration
 not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
-prompt_guidelines = f"""
-    - Only answer questions relevant to the tables listed in the table schema. If a non-related question comes, answer exactly: select 'Question is not related to the dataset' as unrelated_answer from dual.
-    - Join as minimal tables as possible.
-    - When joining tables ensure all join columns are the same data_type.
-    - Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
-    - For all requests not related to the number of users matching certain criteria, always use approximate count.
-    - Properties requiring time-related filtering must use columns with prefix 'daily_' filtered with 'session_day' in a 'WHERE' block, and not columns with prefix 'total_'.
-    - Never use "user_id" in the "GROUP BY" statement for the top "SELECT" block.
-    - Never use the 'ARRAY_FILTER' function.
-    - Never use the 'DISTINCT_AGG' function.
-    - Convert TIMESTAMP to DATE.
-    - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
-    - Don't include any comments in code.
-    - Give human readable names to tables and columns in the generated SQL query, in lowercase.
-    - Remove 'sql' prefix, ```sql and ``` from the output and generate the SQL in single line.
-    - Tables should be refered to using a fully qualified name (project_id.owner.table_name).
-    - Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
-    - Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.
-    - Use ONLY the column names (column_name) mentioned in Table Schema. DO NOT USE any other column names outside of this.
-    - Associate column_name mentioned in Table Schema only to the table_name specified under Table Schema.
-    - Use SQL 'AS' statement to assign a new name temporarily to a table column or even a table wherever needed.
-    - Table names are case sensitive. DO NOT uppercase or lowercase the table names.
-    - Owner (dataset) is case sensitive. DO NOT uppercase or lowercase the owner.
-    - Project_id is case sensitive. DO NOT uppercase or lowercase the project_id.
-    """
+prompt_guidelines = """- Only answer questions relevant to the tables listed in [Table Schema]. If a non-related question comes, answer exactly: 'Question is not related to any listed dataset'.
+- Join as minimal tables as possible.
+- When joining tables ensure all join columns are the same data_type.
+- Analyze the database and the table schema provided as parameters and undestand the relations (column and table relations).
+- For questions about finding a number of users, always approximate the number of users.
+- For questions about listing brands, categories, products, always find distinct elements.
+- Never use "user_id" in the "GROUP BY" statement for the top "SELECT" block.
+- Never use the 'ARRAY_FILTER' function.
+- Never use the 'DISTINCT_AGG' function.
+- Convert TIMESTAMP to DATE.
+- Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
+- Don't include any comments in code.
+- Give human readable names to tables and columns in the generated SQL query, in lowercase.
+- Remove "sql", ```sql and ``` strings from the output and generate the SQL in single line.
+- Tables should be refered to using a fully qualified name (project_id.owner.table_name).
+- Use all the non-aggregated columns from the "SELECT" statement while framing "GROUP BY" block.
+- Return syntactically and semantically correct SQL for BigQuery with proper relation mapping i.e project_id, owner, table and column relation.
+- Use ONLY the column names (column_name) mentioned in Table Schema. DO NOT USE any other column names outside of this.
+- Associate column_name mentioned in Table Schema only to the table_name specified under [Table Schema].
+- Use SQL 'AS' statement to assign a new name temporarily to a table column or even a table wherever needed.
+- Table names are case sensitive. DO NOT uppercase or lowercase the table names.
+- Owner (dataset) is case sensitive. DO NOT uppercase or lowercase the owner.
+- Project_id is case sensitive. DO NOT uppercase or lowercase the project_id."""

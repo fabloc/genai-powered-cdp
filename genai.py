@@ -1,35 +1,37 @@
 import logging, cfg
-from vertexai.preview.generative_models import Content, Part
+
+import vertexai
 from vertexai.preview.generative_models import GenerativeModel
 from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
 import json
 import jsonschema
 from json import JSONDecodeError
 from concurrent.futures import ThreadPoolExecutor
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_vertexai import ChatVertexAI
 
 def init():
+
+  vertexai.init(project=cfg.project_id, location="us-central1")
 
   # create logger
   global logger
   logger = logging.getLogger('nl2sql')
 
   global fast_sql_generation_model
-  fast_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fast_sql_generation_model)
+  fast_sql_generation_model = createModel(cfg.fast_sql_generation_model)
 
   global fine_sql_generation_model
-  fine_sql_generation_model = createModel(cfg.project_id, "us-central1", cfg.fine_sql_generation_model)
-
-  global sql_correction_model
-  sql_correction_model = createModel(cfg.project_id, "us-central1", cfg.sql_correction_model_id)
+  fine_sql_generation_model = createModel(cfg.fine_sql_generation_model)
 
   global validation_model
-  validation_model = createModel(cfg.project_id, "us-central1", cfg.validation_model_id)
+  validation_model = createModel(cfg.validation_model_id)
 
   global executor
   executor = ThreadPoolExecutor(5)
 
 # Initialize Palm Models to be used
-def createModel(PROJECT_ID, REGION, model_id):
+def createModel(model_id):
 
   if model_id == 'code-bison-32k':
     model = CodeGenerationModel.from_pretrained(model_id)
@@ -40,7 +42,7 @@ def createModel(PROJECT_ID, REGION, model_id):
   elif 'chat-bison-32k' in model_id:
     model = ChatModel.from_pretrained(model_id)
   elif model_id == 'text-unicorn':
-    model = TextGenerationModel.from_pretrained(model_id)
+    model = TextGenerationModel.from_pretrained('text-unicorn@001')
   else:
     logger.error("Requested model '" + model_id + "' not supported. Please review the config.ini file.")
     raise ValueError
@@ -53,29 +55,24 @@ def generate_sql(model, context_prompt, temperature = 0.0):
       context_prompt,
       generation_config={
         "max_output_tokens": 1024,
-        "temperature": temperature,
-        "top_p": 1
+        "temperature": temperature
     })
     generated_sql = generated_sql_json.candidates[0].content.parts[0].text
   elif isinstance(model, TextGenerationModel):
-    parameters = {
-        "candidate_count": 1,
-        "max_output_tokens": 1024,
-        "temperature": temperature,
-        "top_k": 40
-    }
     generated_sql_json = model.predict(
-      context_prompt,
-      **parameters)
+      str(context_prompt),
+      max_output_tokens = 1024,
+      temperature = temperature
+    )
     generated_sql = generated_sql_json.text
-  return clean_json(generated_sql)
+  return clean(generated_sql)
 
 def question_to_query_examples(similar_questions):
   similar_questions_str = ''
   if len(similar_questions) > 0:
-    similar_questions_str = "Good SQL Examples:\n\n"
+    similar_questions_str = "[Good SQL Examples]:\n\n"
     for similar_question in similar_questions:
-      similar_questions_str += "    - Question:\n" + similar_question['question'] + "\n    -SQL Query:\n" + similar_question['sql_query'] + "\n\n"
+      similar_questions_str += '\n\n'.join("- Question:\n" + similar_question['question'] + "\n-SQL Query:\n" + similar_question['sql_query'])
   return similar_questions_str
 
 
@@ -89,31 +86,27 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
   else:
     logger.info("No similar question found, using fine model to generate SQL Query")
 
-  not_related_msg='select \'Question is not related to the dataset\' as unrelated_answer from dual;'
-  context_prompt = f"""
-You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the following question while using the provided context to correctly refer to the BigQuery tables and the needed column names.
+  context_prompt = f"""You are a BigQuery SQL guru. Write a SQL conformant query for Bigquery that answers the [Question] while using the provided context to correctly refer to the BigQuery tables and the needed column names.
 
-Guidelines:
+[Guidelines]:
 {cfg.prompt_guidelines}
 
-Tables Schema:
+[Table Schema]:
 {table_result_joined}
-
 {similar_questions_str}
 
-Question:
-  {question}
+[Question]:
+{question}
 
-SQL Generated:
-
-    """
+[SQL Generated]:
+"""
 
     #Column Descriptions:
     #{column_result_joined}
 
   logger.debug('LLM GEN SQL Prompt: \n' + context_prompt)
 
-  context_query = generate_sql(fast_sql_generation_model if fast is True else fine_sql_generation_model, context_prompt)
+  context_query = generate_sql((fast_sql_generation_model if fast is True else fine_sql_generation_model), context_prompt)
 
   return context_query
 
@@ -246,27 +239,38 @@ Remember that before you answer a question, you must check to see if it complies
 
 class SessionChat:
 
-  def __init__(self, model, context):
+  def __init__(self, context, temperature = 0.0):
 
-    self.chat = model.start_chat(history=[
-      Content(role="user", parts=[Part.from_text(context)]),
-      Content(role="model", parts=[Part.from_text('YES')]),
-    ])
+    self.context = context
+    prompt = ChatPromptTemplate.from_messages([("system", context)])
+    self.chat = ChatVertexAI(model = cfg.sql_correction_model_id, temperature = temperature, max_output_tokens = 1024)
+    self.init = True
       
-  def get_chat_response(self, prompt: str) -> str:
+  def get_chat_response(self, prompt_str: str) -> str:
       logger.info("Sending chat prompt...")
-      response = self.chat.send_message(prompt)
-      logger.info("Chat prompt received: " + response.text)
-      return response.text
+      if self.init:
+        self.init = False
+        prompt = ChatPromptTemplate.from_messages([("system", self.context), ("human", prompt_str)])
+      else:
+        prompt = ChatPromptTemplate.from_messages([("human", prompt_str)])
+      chain = prompt | self.chat
+      response = chain.invoke({})
 
+      clean_response = clean(response.content)
+      logger.info("Chat prompt received: " + clean_response)
+      return clean_response
+
+
+def clean(str):
+  return clean_json(clean_sql(str))
 
 def clean_sql(result):
-  result = result.replace("```sql", "").replace("```", "")
+  result = result.replace("sql", "").replace("```", "")
   return result
 
 
 def clean_json(result):
-  result = result.replace("```json", "").replace("```", "")
+  result = result.replace("json", "").replace("```", "")
   return result
 
 
@@ -278,45 +282,40 @@ You are a BigQuery SQL guru. This session is trying to troubleshoot a Google Big
 As the user provides versions of the query and the errors with the SQL Query, return a never seen alternative SQL query that fixes the errors.
 It is important that the query still answers the original question and follows the following guidelines:
 
-Guidelines:
+[Guidelines]:
 {cfg.prompt_guidelines}
-
-Please reply 'YES' if you understand.
-    """
+"""
    
   def __init__(self):
-      super().__init__(sql_correction_model, self.sql_correction_context)
+      super().__init__(self.sql_correction_context)
 
   def get_chat_response(self, table_schema, similar_questions, question, generated_sql, bq_error_msg, validation_error_msg):
 
 
     error_msg = ('- Syntax error returned from BigQuery: ' + bq_error_msg if bq_error_msg != None else '') + ('\n' + validation_error_msg if validation_error_msg != None else '')
 
-    context_prompt = f"""
-What is an alternative SQL statement to address the errors mentioned below?
+    context_prompt = f"""What is an alternative SQL statement to address the errors mentioned below?
 Present a different SQL from previous ones. It is important that the query still answer the original question.
 Do not repeat suggestions.
 
-Question:
+[Question]:
 {question}
 
-Previously Generated (bad) SQL Query:
+[Previously Generated (bad) SQL Query]:
 {generated_sql}
 
-Error Messages:
+[Error Messages]:
 {error_msg}
 
-Table Schema:
+[Table Schema]:
 {table_schema}
-
 {question_to_query_examples(similar_questions)}
 
-New Generated SQL Query:
-
-    """
+[New Generated SQL Query]:
+"""
 
     logger.debug('SQL Correction Chat Prompt: \n' + context_prompt)
 
     response = super().get_chat_response(context_prompt)
 
-    return clean_sql(str(response))
+    return response
