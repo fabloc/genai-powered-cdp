@@ -48,9 +48,11 @@ if prompt := st.chat_input("How many users did not purchase anything during the 
         message_placeholder.altair_chart(c)
       else:
         message_placeholder.dataframe(response, hide_index=is_audience)
+        message_placeholder.markdown(f"""The generated SQL Query answers the question:  
+***{generated_query['reversed_question']}***""")
       status.update(label="Request Successfully Processed", state="complete", expanded=False)
     else:
       response = generated_query['error_message']
       message_placeholder.markdown(response)
       status.update(label="Error While Processing Request", state="error", expanded=False)
-  st.session_state.messages.append({"role": "assistant", "content": response, "status": generated_query['status'], "is_audience": is_audience})
+  st.session_state.messages.append({"role": "assistant", "content": response, "status": generated_query['status'], "is_audience": is_audience, "reversed_question": generated_query['reversed_question']})

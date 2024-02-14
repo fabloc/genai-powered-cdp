@@ -73,6 +73,7 @@ prompt_guidelines = """- Only answer questions relevant to the tables listed in 
 - Never use "user_id" in the "GROUP BY" statement for the top "SELECT" block.
 - Never use the 'ARRAY_FILTER' function.
 - Never use the 'DISTINCT_AGG' function.
+- Never use the 'PARSE_DATE' function.
 - Convert TIMESTAMP to DATE.
 - Consider alternative options to CAST function. If performing a CAST, use only Bigquery supported datatypes.
 - Don't include any comments in code.

@@ -175,7 +175,7 @@ def init_table_and_columns_desc():
       pgvector_handler.add_table_desc_2_pgvector(table_comments_df)
 
     # Look for files listing sample queries to be ingested in the pgVector DB
-    # insert_sample_queries_lookup(tables_list)
+    insert_sample_queries_lookup(tables_list)
 
 
 # Build a custom "detailed_description" table column to be indexed by the Vector DB
@@ -311,7 +311,8 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     'unrelated_question': False,
     'sql_generation_success': False,
     'sql_validation_success': False,
-    'error_messages': None
+    'error_messages': None,
+    'reversed_question' : None
   }
 
   streamlit_status.write("Generating SQL Request")
@@ -365,7 +366,6 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
         logger.info("Generating SQL query using LLM...")
         generated_sql = genai.gen_dyn_rag_sql(question,table_result_joined, similar_questions)
         streamlit_status.write("SQL Query Generated")
-        logger.info("SQL query generated:\n" + generated_sql)
         metrics['sql_generation_duration'] = time.time() - start_time
         if 'unrelated_answer' in generated_sql :
           workflow['stop_loop']=True
@@ -400,6 +400,8 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
       sql_explanation = future_sql_validation.result()
       streamlit_status.write("SQL Query Matches Initial Request: " + str(sql_explanation['is_matching']))
 
+      status['reversed_question'] = sql_explanation['reversed_question']
+
       # If BigQuery validation AND Query semantic validation were both successful : SQL was correctly generated.
       if status['bq_status']['status'] == 'Success' and sql_explanation['is_matching'] == True:
 
@@ -426,14 +428,11 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 
           ### Need to call retry
           if workflow['first_loop'] is True:
-            error_correction_chat_session = genai.SQLCorrectionChat()
+            error_correction_chat_session = genai.CorrectionSession(table_result_joined, question, similar_questions)
             workflow['first_loop'] = False
 
           rewrite_result = execute_with_timeout(
-            error_correction_chat_session.get_chat_response,
-            table_result_joined,
-            similar_questions,
-            question,
+            error_correction_chat_session.get_corrected_sql,
             generated_sql,
             status['bq_status']['error_message'],
             sql_explanation['mismatch_details'])
@@ -542,6 +541,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     'table_matching_duration': round(metrics['table_matching_duration'], 3),
     'sql_generation_duration': round(metrics['sql_generation_duration'], 3) if metrics['sql_generation_duration'] != -1 else None,
     'bq_execution_duration': round(metrics['bq_execution_duration'], 3) if metrics['bq_execution_duration'] != -1 else None,
+    'reversed_question': status['reversed_question'] if status['reversed_question'] is not None else None,
     'sql_added_to_vector_db_duration' : round(metrics['sql_added_to_vector_db_duration'], 3) if sql_result_df is not None and cfg.auto_add_knowngood_sql is True else None
   }
 

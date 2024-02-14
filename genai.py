@@ -1,9 +1,8 @@
 import logging, cfg
-
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel
 from vertexai.preview.language_models import CodeGenerationModel, ChatModel, CodeChatModel, TextGenerationModel
-import json
+import json, re
 import jsonschema
 from json import JSONDecodeError
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +25,9 @@ def init():
 
   global validation_model
   validation_model = createModel(cfg.validation_model_id)
+
+  global sql_correction_model
+  validation_model = createModel(cfg.sql_correction_model_id)
 
   global executor
   executor = ThreadPoolExecutor(5)
@@ -70,9 +72,9 @@ def generate_sql(model, context_prompt, temperature = 0.0):
 def question_to_query_examples(similar_questions):
   similar_questions_str = ''
   if len(similar_questions) > 0:
-    similar_questions_str = "[Good SQL Examples]:\n\n"
+    similar_questions_str = "[Good SQL Examples]:\n"
     for similar_question in similar_questions:
-      similar_questions_str += '\n\n'.join("- Question:\n" + similar_question['question'] + "\n-SQL Query:\n" + similar_question['sql_query'])
+      similar_questions_str += "- Question:\n" + similar_question['question'] + "\n-SQL Query:\n" + full_clean(similar_question['sql_query']) + '\n\n'
   return similar_questions_str
 
 
@@ -108,7 +110,9 @@ def gen_dyn_rag_sql(question,table_result_joined, similar_questions):
 
   context_query = generate_sql((fast_sql_generation_model if fast is True else fine_sql_generation_model), context_prompt)
 
-  return context_query
+  logger.info("SQL query generated:\n" + context_query)
+
+  return full_clean(context_query)
 
 def sql_explain(question, generated_sql, table_schema, similar_questions):
 
@@ -120,13 +124,11 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
         "classification": "classification of the filter",
         "columns": [{
           "name": "Name of every column from [SQL Query] implementing the filter, from [Table Schema]",
-          "scope": "Scope of the column",
+          "scope": "Scope of the column. It can have the values 'global', 'time-dependent' or 'both'",
           "is_relevant": "True if the column is correctly implementing the filter, False otherwise"
         }]
     }],
-    "mismatch_details": [
-      "Describe in natural language in a few words the columns from the [SQL Query] that implements logic not requested by [Filters]"
-    ]
+    "reversed_question": "Write in natural language the question that the [SQL Query] is responding to"
   }
 
   schema = {
@@ -149,12 +151,9 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
           "required": ["name", "classification", "columns"]
         }
       },
-      "unneeded_filter": {
-        "type": "array",
-        "items": {"type": "string"}
-      }
+      "reversed_question": {"type": "string"}
     },
-    "required": ["filters"]
+    "required": ["filters", "reversed_question"]
   }
 
   sql_explanation = {
@@ -162,14 +161,13 @@ def sql_explain(question, generated_sql, table_schema, similar_questions):
     "mismatch_details": ''
   }
 
-  context_prompt = f"""
-You are an AI for SQL Analysis. Your mission is to analyse a SQL [SQL Query] and identify how its different parts answer a [Question].
+  context_prompt = f"""You are an AI for SQL Analysis. Your mission is to analyse a SQL [SQL Query] and identify how its different parts answer a [Question].
 You will reply only with a json object as described in the [Analysis Steps].
 
 [Table Schema]:
 {table_schema}
 
-[Analysis Steps]:
+{question_to_query_examples(similar_questions)}[Analysis Steps]:
 Let's work this out step by step to make sure we have the right answer:
 1. Analyze the tables in [Table Schema], and understand the relations (column and table relations).
 2. For each column in each table of [Table Schema], find its scope in its description (format: 'Scope: (time-dependent|global)').
@@ -189,7 +187,6 @@ Remember that before you answer a question, you must check to see if it complies
 {question}
 
 [Evaluation]:
-
 """
 
   logger.debug('Validation - Question Generation from SQL Prompt: \n' + context_prompt)
@@ -206,16 +203,14 @@ Remember that before you answer a question, you must check to see if it complies
     # Analyze results for possible mismatch in SQL Query implementation
     for filter in validation_json['filters']:
       for column in filter['columns']:
-        if column['scope'] != filter['classification']:
+        if column['scope'] != 'both' and column['scope'] != filter['classification']:
           sql_explanation['is_matching'] = 'False'
           sql_explanation['mismatch_details'] += "- \"" + filter['name'] + "\" is implemented using column '" + column['name'] + "' with scope '" + column['scope'] + "'. Use a column with scope '" + ('time-dependent' if column['scope'] == 'global' else 'global') + "' instead.\n"
         if column['is_relevant'] == False:
           sql_explanation['is_matching'] = 'False'
           sql_explanation["mismatch_details"] += "- The column '" + column['name'] + "' is either not relevant or not used correctly to implement the filter '" + filter['name'] + "'.\n"
 
-    if len(validation_json['mismatch_details']) > 0:
-      sql_explanation["is_matching"] = False
-      sql_explanation["mismatch_details"] += "- The SQL Query has the following implementation errors: \"" + ("\", \"".join(validation_json['mismatch_details']) + "\"\n")
+    sql_explanation["reversed_question"] = validation_json['reversed_question']
 
   except JSONDecodeError as e:
     logger.error("Error while deconding JSON response: " + str(e))
@@ -228,38 +223,97 @@ Remember that before you answer a question, you must check to see if it complies
   except jsonschema.exceptions.SchemaError as e:
     logger.error("Invalid JSON Schema !")
   except Exception as e:
-    logger.error("Exception: " + str(e))
-    sql_explanation['is_matching'] = 'False'
-    sql_explanation['mismatch_details'] = 'Undefined error. Retry'
+    raise e
 
   logger.info("Validation response analysis: \n" + json.dumps(sql_explanation))
 
   return sql_explanation
 
 
-class SessionChat:
+class CorrectionSession:
 
-  def __init__(self, context, temperature = 0.0):
+  def __init__(self, table_schema: str, question: str, similar_questions: str):
 
-    self.context = context
-    prompt = ChatPromptTemplate.from_messages([("system", context)])
-    self.chat = ChatVertexAI(model = cfg.sql_correction_model_id, temperature = temperature, max_output_tokens = 1024)
-    self.init = True
-      
-  def get_chat_response(self, prompt_str: str) -> str:
-      logger.info("Sending chat prompt...")
-      if self.init:
-        self.init = False
-        prompt = ChatPromptTemplate.from_messages([("system", self.context), ("human", prompt_str)])
-      else:
-        prompt = ChatPromptTemplate.from_messages([("human", prompt_str)])
-      chain = prompt | self.chat
-      response = chain.invoke({})
+    self.table_schema = table_schema
+    self.question = question
+    self.similar_questions = similar_questions
+    
+    self.model = createModel(cfg.sql_correction_model_id)
+    self.iterations_history = []
 
-      clean_response = clean(response.content)
-      logger.info("Chat prompt received: " + clean_response)
-      return clean_response
+  def add_iteration(self, sql, errors):
+    self.iterations_history.append({
+      'sql': sql.replace('\n', ' '),
+      'errors': errors.replace('\n', '')
+    })
 
+  def format_history(self) -> str:
+    history_str = ''
+    for iteration in self.iterations_history:
+      history_str += f"""{iteration['sql']}
+
+"""
+    return history_str
+  
+  def format_last_query(self) -> str:
+
+    last_query = self.iterations_history[-1]
+    return f"""SQL Query:
+{last_query['sql']}
+
+Errors:
+{last_query['errors']}"""
+
+
+  def get_corrected_sql(self, sql: str, bq_error_msg: str, validation_error_msg: str) -> str:
+    logger.info("Sending prompt...")
+    error_msg = ('- Syntax error returned from BigQuery: ' + bq_error_msg if bq_error_msg != None else '') + ('\n  ' + validation_error_msg if validation_error_msg != None else '')
+    self.add_iteration(sql, error_msg)
+
+    context_prompt = f"""You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL Query.
+As the user provides the [Last Generated SQL Queries with Errors], return a correct [New Generated SQL Query] that fixes the errors.
+It is important that the query still answers the original question and follows the following [Guidelines]:
+
+[Guidelines]:
+{cfg.prompt_guidelines}
+
+[Table Schema]:
+{self.table_schema}
+{question_to_query_examples(self.similar_questions)}
+
+[Correction Steps]:
+Let's work this out step by step to make sure we have the right corrected SQL Query:
+1. Analyze the tables in [Table Schema], and understand the relations (column and table relations).
+2. Analyze the SQL Query in [Last Generated SQL Queries with Errors] and understand why it has errors.
+3. Propose a SQL Query that corrects the [Last Generated SQL Queries with Errors] while matching the [Question].
+4. The [New Generated SQL Query] must not be present in [Forbidden SQL Queries] 
+5. Always use double quotes "" for json property names and values in the returned json object.
+6. Remove ```json prefix and ``` suffix from the outputs. Don't add any comment around the returned json.
+
+Remember that before you answer a question, you must check to see if it complies with your mission above.
+
+[Question]:
+{self.question}
+
+[Last Generated SQL Queries with Errors]:
+{self.format_last_query()}
+
+[Forbidden SQL Queries]:
+{self.format_history()}
+[New Generated SQL Query]:
+"""
+
+    logger.debug('SQL Correction Prompt: \n' + context_prompt)
+
+    response = generate_sql(self.model, context_prompt)
+    logger.info("Received corrected SQL Query: \n" + response)
+
+    return full_clean(response)
+
+
+def full_clean(str):
+  # Remove unwanted 'sql', 'json', and additional spaces
+  return re.sub(' +', ' ', str.replace('\n', ' '))
 
 def clean(str):
   return clean_json(clean_sql(str))
@@ -272,50 +326,3 @@ def clean_sql(result):
 def clean_json(result):
   result = result.replace("json", "").replace("```", "")
   return result
-
-
-class SQLCorrectionChat(SessionChat):
-
-  sql_correction_context = f"""
-
-You are a BigQuery SQL guru. This session is trying to troubleshoot a Google BigQuery SQL query.
-As the user provides versions of the query and the errors with the SQL Query, return a never seen alternative SQL query that fixes the errors.
-It is important that the query still answers the original question and follows the following guidelines:
-
-[Guidelines]:
-{cfg.prompt_guidelines}
-"""
-   
-  def __init__(self):
-      super().__init__(self.sql_correction_context)
-
-  def get_chat_response(self, table_schema, similar_questions, question, generated_sql, bq_error_msg, validation_error_msg):
-
-
-    error_msg = ('- Syntax error returned from BigQuery: ' + bq_error_msg if bq_error_msg != None else '') + ('\n' + validation_error_msg if validation_error_msg != None else '')
-
-    context_prompt = f"""What is an alternative SQL statement to address the errors mentioned below?
-Present a different SQL from previous ones. It is important that the query still answer the original question.
-Do not repeat suggestions.
-
-[Question]:
-{question}
-
-[Previously Generated (bad) SQL Query]:
-{generated_sql}
-
-[Error Messages]:
-{error_msg}
-
-[Table Schema]:
-{table_schema}
-{question_to_query_examples(similar_questions)}
-
-[New Generated SQL Query]:
-"""
-
-    logger.debug('SQL Correction Chat Prompt: \n' + context_prompt)
-
-    response = super().get_chat_response(context_prompt)
-
-    return response
