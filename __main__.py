@@ -1,3 +1,4 @@
+from decimal import Decimal
 import streamlit as st
 import altair as alt
 import nl2sql
@@ -42,14 +43,15 @@ if prompt := st.chat_input("How many users did not purchase anything during the 
         for col in response.columns:
           if col != date_col.columns[0]:
             chart_columns.append(col)
-        c = (
-          alt.Chart(response.rename(columns={date_col.columns[0]:'index'}).set_index('index')).mark_line().encode(x = 'index', y = chart_columns[0])
-        )
-        message_placeholder.altair_chart(c)
+        grouped_df = response.groupby([date_col.columns[0]]).sum()
+        print("Grouped Dataframe: \n" + str(grouped_df))
+        print("dtypes of columns: " + str(grouped_df.dtypes))
+        # reshaped_df = grouped_df.unstack(level=date_col.columns[0])
+        message_placeholder.line_chart(grouped_df)
       else:
         message_placeholder.dataframe(response, hide_index=is_audience)
-        message_placeholder.markdown(f"""The generated SQL Query answers the question:  
-***{generated_query['reversed_question']}***""")
+        #message_placeholder.markdown(f"""The generated SQL Query answers the question:  
+# ***{generated_query['reversed_question']}***""")
       status.update(label="Request Successfully Processed", state="complete", expanded=False)
     else:
       response = generated_query['error_message']

@@ -516,10 +516,8 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 
   if sql_result_df is not None:
     # Convert dates columns into datetime dtype, so that they can be easily identified in the UI part
-    sql_result_df = sql_result_df.apply(lambda col: pd.to_datetime(col, errors='ignore') 
-        if col.dtypes == object 
-        else col, 
-        axis=0)
+    sql_result_df = sql_result_df.apply(lambda col: pd.to_datetime(col, errors='ignore') if col.dtypes == object else col, axis=0)
+    sql_result_df = sql_result_df.apply(lambda col: pd.to_numeric(col, errors='ignore') if col.dtypes == object else col, axis=0)
     if 'hll_user_aggregates' in matched_tables:
       if sql_result_df.empty is not True:
         sql_result_df.reset_index(drop=True)
