@@ -516,7 +516,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 
   if sql_result_df is not None:
     # Convert dates columns into datetime dtype, so that they can be easily identified in the UI part
-    sql_result_df = sql_result_df.apply(lambda col: pd.to_datetime(col, errors='ignore') if col.dtypes == object else col, axis=0)
+    sql_result_df = sql_result_df.apply(lambda col: pd.to_datetime(col, errors='ignore', format="%Y-%m-%d") if col.dtypes == object else col, axis=0)
     sql_result_df = sql_result_df.apply(lambda col: pd.to_numeric(col, errors='ignore') if col.dtypes == object else col, axis=0)
     if 'hll_user_aggregates' in matched_tables:
       if sql_result_df.empty is not True:
@@ -526,6 +526,9 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
       is_audience_result = False
   else:
     is_audience_result = False
+
+  # Save the dataframe to a CSV file
+  sql_result_df.to_csv('sql_results_dump.csv', index=True)
 
   response = {
     'status': status['status'],

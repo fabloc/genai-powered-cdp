@@ -11,4 +11,3 @@ pgvector[asyncpg]
 cloud-sql-python-connector[pg8000]
 cloud-sql-python-connector[asyncpg]
 pyyaml
-langchain-google-vertexai

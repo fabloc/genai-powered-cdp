@@ -2,6 +2,7 @@
 *.pyc
 *.log
 *.log.*
+*.csv
 test_*.py
 .env*
 .vscode*
