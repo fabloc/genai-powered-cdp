@@ -1,0 +1,13 @@
+google-cloud
+google-cloud-bigquery
+sqlalchemy
+asyncio
+pandas_gbq
+pg8000
+streamlit
+google-cloud-aiplatform
+pgvector
+pgvector[asyncpg]
+cloud-sql-python-connector[pg8000]
+cloud-sql-python-connector[asyncpg]
+pyyaml
