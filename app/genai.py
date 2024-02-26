@@ -6,8 +6,6 @@ import json, re
 import jsonschema
 from json import JSONDecodeError
 from concurrent.futures import ThreadPoolExecutor
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_vertexai import ChatVertexAI
 
 def init():
 

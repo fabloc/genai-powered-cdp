@@ -6,6 +6,14 @@ provider "google" {
 # VPC Network
 resource "google_compute_network" "cdp_vpc" {
   name = "cdp-vpc"
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "cdp_subnet" {
+  name          = "test-subnetwork"
+  ip_cidr_range = "10.0.0.0/24"
+  region        = "europe-west1"
+  network       = google_compute_network.cdp_vpc.id
 }
 
 resource "google_compute_global_address" "private_ip_address" {

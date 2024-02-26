@@ -11,6 +11,7 @@ from logging import exception
 import asyncio
 import asyncpg
 from google.cloud.sql.connector import Connector
+from google.cloud.sql.connector import IPTypes
 from pgvector.asyncpg import register_vector
 import logging
 import cfg
@@ -51,7 +52,8 @@ class VectorConnectionMgr:
             "pg8000",
             user=cfg.database_user,
             password=cfg.database_password,
-            db=cfg.database_name
+            db=cfg.database_name,
+            ip_type=IPTypes.PRIVATE
         )
         return conn
     
@@ -62,11 +64,12 @@ class VectorConnectionMgr:
         async with Connector(loop=loop) as connector:
             # Create connection to Cloud SQL database.
             conn: asyncpg.Connection = await connector.connect_async(
-                cfg.project_id + ":" + cfg.region + ":" + cfg.instance_name,  # Cloud SQL instance connection name
-                "asyncpg",
+                instance_connection_string = cfg.project_id + ":" + cfg.region + ":" + cfg.instance_name,  # Cloud SQL instance connection name
+                driver = "asyncpg",
                 user=cfg.database_user,
                 password=cfg.database_password,
-                db=cfg.database_name
+                db=cfg.database_name,
+                ip_type=IPTypes.PRIVATE
             )
 
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
