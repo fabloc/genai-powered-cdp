@@ -119,7 +119,7 @@ def get_tables(df):
 def insert_sample_queries_lookup(tables_list):
   queries_samples = []
   for table_name in tables_list:
-    samples_filename = '/shared/queries_samples/' + table_name + '.yaml'
+    samples_filename = 'shared/queries_samples/' + table_name + '.yaml'
     if os.path.exists(samples_filename):
       with open(samples_filename) as stream:
         try:
@@ -315,7 +315,8 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     'reversed_question' : None
   }
 
-  streamlit_status.write("Generating SQL Request")
+  if streamlit_status is not None:
+    streamlit_status.write("Generating SQL Request")
 
   logger.info("Creating text embedding from question...")
   start_time = time.time()
@@ -365,7 +366,8 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
         start_time = time.time()
         logger.info("Generating SQL query using LLM...")
         generated_sql = genai.gen_dyn_rag_sql(question,table_result_joined, similar_questions)
-        streamlit_status.write("SQL Query Generated")
+        if streamlit_status is not None:
+          streamlit_status.write("SQL Query Generated")
         metrics['sql_generation_duration'] = time.time() - start_time
         if 'unrelated_answer' in generated_sql :
           workflow['stop_loop']=True
@@ -402,11 +404,13 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
         sql_explanation = {'is_matching': True, 'reversed_question': None}
 
       status['bq_status'],_ = future_test_plan.result()
-      streamlit_status.write("SQL Query Syntax Check: " + status['bq_status']['status'])
+      if streamlit_status is not None:
+        streamlit_status.write("SQL Query Syntax Check: " + status['bq_status']['status'])
 
       if cfg.semantic_validation is True:
         sql_explanation = future_sql_validation.result()
-        streamlit_status.write("SQL Query Matches Initial Request: " + str(sql_explanation['is_matching']))
+        if streamlit_status is not None:
+          streamlit_status.write("SQL Query Matches Initial Request: " + str(sql_explanation['is_matching']))
         status['reversed_question'] = sql_explanation['reversed_question']
 
       # If BigQuery validation AND Query semantic validation were both successful : SQL was correctly generated.
@@ -444,7 +448,8 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
             status['bq_status']['error_message'],
             sql_explanation['mismatch_details'])
           
-          streamlit_status.write("New SQL Query Generated. Trial #" + str(workflow['error_retry_count']) + "/" + str(workflow['error_retry_max_count']))
+          if streamlit_status is not None:
+            streamlit_status.write("New SQL Query Generated. Trial #" + str(workflow['error_retry_count']) + "/" + str(workflow['error_retry_max_count']))
           
           generated_sql = rewrite_result
 

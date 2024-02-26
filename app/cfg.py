@@ -1,6 +1,8 @@
-import configparser, json
+import configparser, json, os
 from configparser import ExtendedInterpolation
 
+log_filename = "var/logs/cdp.log"
+os.makedirs(os.path.dirname(log_filename), exist_ok=True)
 config = configparser.ConfigParser(interpolation=ExtendedInterpolation())
 config.read('shared/config/config.ini')
 gcp_config = config['GOOGLE_CLOUD']

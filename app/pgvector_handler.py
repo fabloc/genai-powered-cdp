@@ -56,10 +56,10 @@ class VectorConnectionMgr:
             ip_type=IPTypes.PRIVATE
         )
         return conn
-    
+
+
     # Configure pgVector extension if the same does not exist
     async def add_pgvector_ext(self):
-
         loop = asyncio.get_running_loop()
         async with Connector(loop=loop) as connector:
             # Create connection to Cloud SQL database.
@@ -77,6 +77,38 @@ class VectorConnectionMgr:
             await register_vector(conn)
 
             await conn.close()
+
+
+    # Creating tables 'table_embeddings' and 'sql_embeddings' if they do not exist
+    def create_tables(self):
+
+        sql="""CREATE TABLE IF NOT EXISTS table_embeddings(
+            id varchar(256) PRIMARY KEY,
+            detailed_description TEXT,
+            requestor varchar(50),
+            table_catalog varchar(128),
+            table_schema varchar(128),
+            table_name varchar(50),
+            added_epoch timestamp with time zone,
+            source_type varchar(50),
+            embedding vector(768))"""
+
+        self.execute_query(sql, write=True)
+
+        sql="""CREATE TABLE IF NOT EXISTS sql_embeddings(
+            id varchar(256) PRIMARY KEY,
+            question TEXT,
+            generated_sql TEXT,
+            requestor varchar(50),
+            table_catalog varchar(128),
+            table_schema varchar(128),
+            table_name varchar(50),
+            added_epoch timestamp with time zone,
+            source_type varchar(50),
+            embedding vector(768))"""
+
+        self.execute_query(sql, write=True)
+
 
     def execute_query(self, query: str, write=False, schema: str = 'userbase', group_concat_max_len: int = 102400):
 
@@ -100,6 +132,9 @@ def init():
 
     global connection_mgr
     connection_mgr = VectorConnectionMgr(logger)
+
+    # Creating tables
+    connection_mgr.create_tables()
 
 def shutdown():
     connection_mgr.close_connection()
