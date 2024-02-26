@@ -44,6 +44,8 @@ resource "google_sql_database_instance" "pgvector_db" {
   database_version = "POSTGRES_15"
   region           = var.region
 
+  deletion_protection = false
+
   depends_on = [google_service_networking_connection.private_vpc_connection]
 
   settings {

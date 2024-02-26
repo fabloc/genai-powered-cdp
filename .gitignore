@@ -4,3 +4,4 @@
 test_*
 .*
 __pycache__
+terraform.tfstate*
