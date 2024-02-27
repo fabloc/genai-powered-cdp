@@ -7,7 +7,7 @@ handlers:
     class: logging.handlers.TimedRotatingFileHandler
     level: DEBUG
     formatter: defaultFormatter
-    filename: var/logs/cdp.log
+    filename: /var/log/cdp.log
     when: D
     interval: 1
     backupCount: 10

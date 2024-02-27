@@ -119,7 +119,7 @@ def get_tables(df):
 def insert_sample_queries_lookup(tables_list):
   queries_samples = []
   for table_name in tables_list:
-    samples_filename = 'shared/queries_samples/' + table_name + '.yaml'
+    samples_filename = '/shared/queries_samples/' + table_name + '.yaml'
     if os.path.exists(samples_filename):
       with open(samples_filename) as stream:
         try:

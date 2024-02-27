@@ -1,10 +1,13 @@
-import configparser, json, os
+import configparser, json, os, logging
 from configparser import ExtendedInterpolation
 
-log_filename = "var/logs/cdp.log"
-os.makedirs(os.path.dirname(log_filename), exist_ok=True)
+#log_filename = "/var/log/cdp.log"
+# os.makedirs(os.path.dirname(log_filename), exist_ok=True)
+logger = logging.getLogger('cfg')
+with open('/shared/config/config.ini_old', 'r') as f:
+    logger.info(f.read())
 config = configparser.ConfigParser(interpolation=ExtendedInterpolation())
-config.read('shared/config/config.ini')
+config.read('/shared/config/config.ini')
 gcp_config = config['GOOGLE_CLOUD']
 tables_config = config['TABLES']
 vector_config = config['VECTOR_DATABASE']

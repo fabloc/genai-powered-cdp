@@ -1,13 +1,13 @@
 FROM python:3.11
 
-EXPOSE 8080
+EXPOSE 5801
 
-WORKDIR /shared
-COPY ./shared ./
+WORKDIR /shared/
+COPY ./shared/ ./
 
-WORKDIR /app
+WORKDIR /app/
 COPY ./app/ ./
 
 RUN pip install -r requirements.txt
 
-ENTRYPOINT [ "streamlit", "run", "main.py", "--server.port=8080", "--server.address=0.0.0.0" ]
+ENTRYPOINT [ "streamlit", "run", "main.py", "--browser.serverAddress=localhost", "--server.enableCORS=false", "--server.enableXsrfProtection=false" ]
