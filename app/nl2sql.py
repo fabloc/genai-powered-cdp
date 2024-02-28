@@ -3,8 +3,7 @@ import pandas_gbq
 import pandas as pd
 from pathlib import Path
 import pgvector_handler
-import os, json, time, yaml, sys
-import logging.config
+import os, json, time, yaml, sys, logging
 import cfg
 import genai
 import bigquery_handler
@@ -562,15 +561,6 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 
 # -----------------------------------------------------------------------------
 # Module Initialization
-
-# Load the log config file
-log_file = Path.cwd() / "var" / "log" / "cdp.log"
-
-with open(Path.cwd() / "shared" / "config" / "logging_config.yaml", 'rt') as f:
-    config = yaml.safe_load(f.read())
-
-# Configure the logging module with the config file
-logging.config.dictConfig(config)
 
 # create logger
 global logger

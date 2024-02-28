@@ -1,13 +1,20 @@
-import configparser, json, os, logging
+import configparser, json, yaml, os
+import logging.config
 from pathlib import Path
 from configparser import ExtendedInterpolation
 
-log_filename = Path.cwd() / "var" / "log" / "cdp.log"
-os.makedirs(os.path.dirname(log_filename), exist_ok=True)
-logger = logging.getLogger('cfg')
+log_file = Path.cwd() / "var" / "log" / "cdp.log"
+os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+with open(Path.cwd() / "shared" / "config" / "logging_config.yaml", 'rt') as f:
+    config = yaml.safe_load(f.read())
+
+# Configure the logging module with the config file
+logging.config.dictConfig(config)
 
 config = configparser.ConfigParser(interpolation=ExtendedInterpolation())
 config.read(Path.cwd() / "shared" / "config" / "config.ini")
+print("directory: " + str(Path.cwd() / "shared" / "config" / "config.ini"))
 gcp_config = config['GOOGLE_CLOUD']
 tables_config = config['TABLES']
 vector_config = config['VECTOR_DATABASE']

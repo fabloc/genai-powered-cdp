@@ -10,4 +10,6 @@ COPY ./app/ ./
 
 RUN pip install -r requirements.txt
 
-ENTRYPOINT [ "streamlit", "run", "main.py", "--browser.serverAddress=localhost", "--server.enableCORS=false", "--server.enableXsrfProtection=false" ]
+WORKDIR /
+
+ENTRYPOINT [ "streamlit", "run", "app/main.py", "--browser.serverAddress=localhost", "--server.enableCORS=false", "--server.enableXsrfProtection=false" ]
