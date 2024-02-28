@@ -1,6 +1,4 @@
-from decimal import Decimal
 import streamlit as st
-import altair as alt
 import nl2sql
 
 def main():
@@ -51,7 +49,7 @@ def main():
           for col in response.columns:
             if col != date_col.columns[0]:
               if response[col].dtype == 'float64' or response[col].dtype == 'int64':
-                response[col].fillna(0, inplace=True)
+                response.fillna(value={col: 0}, inplace=True)
                 values_columns.append(col)
               else:
                 chart_columns.append(col)

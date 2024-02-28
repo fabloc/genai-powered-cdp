@@ -64,7 +64,7 @@ def execute_bq_query(sql_query, dry_run: bool = True):
       
       else:
         # Execute the SQL query.
-        df = pandas_gbq.read_gbq(sql_query, project_id=cfg.project_id, max_results = cfg.display_bq_max_results)
+        df = pandas_gbq.read_gbq(sql_query, project_id=cfg.project_id, max_results = cfg.display_bq_max_results, progress_bar_type=None)
     
       # If the query is successful, return the results.
       bq_status['status'] = 'Success'
@@ -190,7 +190,7 @@ def append_2_bq(model, question, generated_sql, found_in_vector, need_rewrite, f
         #llogger.info("Table {} already exists.".format(table_id))
         table_exists=True
       except NotFound:
-          logger.error("Table {} is not found.".format(table_id))
+          logger.error("Table {table_id} is not found.".format(table_id))
           table_exists=False
 
       if table_exists is True:

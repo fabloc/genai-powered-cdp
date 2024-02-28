@@ -86,7 +86,7 @@ executor = ThreadPoolExecutor(5)
 def schema_generator(sql):
   formatted_sql = sql.format(**globals(), **locals())
   logger.info("BigQuery request: " + formatted_sql)
-  df = pandas_gbq.read_gbq(formatted_sql, project_id=cfg.project_id, location=cfg.region)
+  df = pandas_gbq.read_gbq(formatted_sql, project_id=cfg.project_id, location=cfg.region, progress_bar_type=None)
   return df
 
 
@@ -119,7 +119,7 @@ def get_tables(df):
 def insert_sample_queries_lookup(tables_list):
   queries_samples = []
   for table_name in tables_list:
-    samples_filename = '/shared/queries_samples/' + table_name + '.yaml'
+    samples_filename = working_dir + '/shared/queries_samples/' + table_name + '.yaml'
     if os.path.exists(samples_filename):
       with open(samples_filename) as stream:
         try:
@@ -563,7 +563,11 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 # Module Initialization
 
 # Load the log config file
-with open('/shared/config/logging_config.yaml', 'rt') as f:
+global working_dir
+working_dir = os.environ.get('WORKING_DIR')
+log_file = working_dir + "/var/log/cdp.log"
+
+with open(working_dir + '/shared/config/logging_config.yaml', 'rt') as f:
     config = yaml.safe_load(f.read())
 
 # Configure the logging module with the config file
