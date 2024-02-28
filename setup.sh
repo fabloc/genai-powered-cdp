@@ -13,6 +13,12 @@ REGION=$(prop "region")
 ARTIFACT_REGISTRY_REPO=$(prop 'artifact_registry_repo')
 SERVICE_NAME=$(prop 'service_name')
 
+echo "***** Project ID: $PROJECT_ID *****"
+echo "***** Region: $REGION *****"
+echo "***** Artifact Registry Repository: $ARTIFACT_REGISTRY_REPO *****"
+echo "***** Service Name: $SERVICE_NAME *****"
+
+
 function check_if_project_id_is_setup() {
     if [ -z "$PROJECT_ID" ]; then
         echo "Error: You must configure your PROJECT_ID."
@@ -101,7 +107,7 @@ echo "***** Checking project constraints *****"
 check_gcp_constraints
 
 # Enable APIs
-echo "***** Enabling Artifact Registry, Cloud Build, Cloud Run, Vertex AI, BigQuery, Compute APIs *****"
+echo "***** Enabling Artifact Registry, Cloud Build, Cloud Run, Vertex AI, BigQuery, Compute APIs and Networking Services *****"
 gcloud services enable artifactregistry.googleapis.com > /dev/null
 gcloud services enable cloudbuild.googleapis.com > /dev/null
 gcloud services enable run.googleapis.com > /dev/null
@@ -123,10 +129,13 @@ gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet > /dev/null
 echo "***** Build WebApp Docker image *****"
 gcloud builds submit --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$SERVICE_NAME" > /dev/null
 
+echo "***** Checking Terraform Installation *****"
 if ! command -v terraform version &> /dev/null
 then
     echo "Terraform is not installed, please install it and try again."
     exit 1
+else
+    echo "Terraform executable found"
 fi
 
 echo "***** Initialize Terraform *****"

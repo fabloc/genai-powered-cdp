@@ -5,3 +5,4 @@ test_*
 .*
 __pycache__
 terraform.tfstate*
+.terraform.lock.hcl

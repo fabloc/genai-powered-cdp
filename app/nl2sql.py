@@ -539,9 +539,6 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
   else:
     is_audience_result = False
 
-  # Save the dataframe to a CSV file
-  sql_result_df.to_csv('sql_results_dump.csv', index=True)
-
   response = {
     'status': status['status'],
     'error_message': status['error_message'] if sql_result_df is None else None,
@@ -566,7 +563,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 # Module Initialization
 
 # Load the log config file
-with open('shared/config/logging_config.yaml', 'rt') as f:
+with open('/shared/config/logging_config.yaml', 'rt') as f:
     config = yaml.safe_load(f.read())
 
 # Configure the logging module with the config file

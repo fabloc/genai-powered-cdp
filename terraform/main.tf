@@ -10,10 +10,11 @@ resource "google_compute_network" "cdp_vpc" {
 }
 
 resource "google_compute_subnetwork" "cdp_subnet" {
-  name          = "test-subnetwork"
-  ip_cidr_range = "10.0.0.0/24"
-  region        = "europe-west1"
-  network       = google_compute_network.cdp_vpc.id
+  name                      = "cdp-subnetwork"
+  ip_cidr_range             = "10.0.0.0/24"
+  region                    = "europe-west1"
+  network                   = google_compute_network.cdp_vpc.id
+  private_ip_google_access  = true
 }
 
 resource "google_compute_global_address" "private_ip_address" {
@@ -69,20 +70,20 @@ resource "google_sql_user" "nl2sql_user" {
   password = var.db_user_password
 }
 
-resource "google_storage_bucket" "shared_bucket" {
-    name     = "nl2sql-bucket-${var.project_id}"
-    location = "europe-west1"
-    uniform_bucket_level_access = true
-}
-
 resource "google_service_account" "cloudrun_sa" {
   account_id   = "${var.project_id}-cloudrun-sa"
   display_name = "Nl2SQL Cloud Run Service Account for accessing Cloud SQL"
 }
 
-resource "google_project_iam_member" "cloudrun_sa_storage" {
+resource "google_project_iam_member" "cloudrun_sa_bigquery_user" {
   project = var.project_id
-  role    = "roles/storage.objectViewer"
+  role    = "roles/bigquery.user"
+  member  = "serviceAccount:${google_service_account.cloudrun_sa.email}"
+}
+
+resource "google_project_iam_member" "cloudrun_sa_bigquery_dataviewer" {
+  project = var.project_id
+  role    = "roles/bigquery.dataViewer"
   member  = "serviceAccount:${google_service_account.cloudrun_sa.email}"
 }
 
@@ -92,10 +93,16 @@ resource "google_project_iam_member" "cloudrun_sa_db_access" {
   member  = "serviceAccount:${google_service_account.cloudrun_sa.email}"
 }
 
+resource "google_project_iam_member" "cloudrun_sa_vertexai" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.cloudrun_sa.email}"
+}
+
 # Cloud Run service 
 resource "google_cloud_run_v2_service" "cloud_run_service" {
   provider = google-beta
-  name     = "cloud-run-service"
+  name     = var.service_name
   project = var.project_id
   location = var.region
   launch_stage = "BETA"
@@ -103,19 +110,15 @@ resource "google_cloud_run_v2_service" "cloud_run_service" {
   template {
     containers {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_registry_repo}/${var.service_name}"
-    }
-
-    volumes {
-      name = "shared"
-      gcs {
-        bucket    = google_storage_bucket.shared_bucket.name
-        read_only = false
+      ports {
+        container_port = 8501
       }
     }
 
     vpc_access{
       network_interfaces {
         network = google_compute_network.cdp_vpc.id
+        subnetwork = google_compute_subnetwork.cdp_subnet.id
       }
       egress = "ALL_TRAFFIC"
     }

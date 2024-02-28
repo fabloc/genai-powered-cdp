@@ -1,6 +1,6 @@
 FROM python:3.11
 
-EXPOSE 5801
+EXPOSE 8501
 
 WORKDIR /shared/
 COPY ./shared/ ./
