@@ -1,6 +1,7 @@
 # Common Imports
 import pandas_gbq
 import pandas as pd
+from pathlib import Path
 import pgvector_handler
 import os, json, time, yaml, sys
 import logging.config
@@ -119,9 +120,9 @@ def get_tables(df):
 def insert_sample_queries_lookup(tables_list):
   queries_samples = []
   for table_name in tables_list:
-    samples_filename = working_dir + '/shared/queries_samples/' + table_name + '.yaml'
-    if os.path.exists(samples_filename):
-      with open(samples_filename) as stream:
+    samples_filename_path = Path.cwd() / "shared" / "queries_samples" / (table_name + '.yaml')
+    if os.path.exists(samples_filename_path):
+      with open(samples_filename_path) as stream:
         try:
           table_queries_samples = yaml.safe_load(stream)
           queries_samples.append(table_queries_samples)
@@ -563,11 +564,9 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
 # Module Initialization
 
 # Load the log config file
-global working_dir
-working_dir = os.environ.get('WORKING_DIR')
-log_file = working_dir + "/var/log/cdp.log"
+log_file = Path.cwd() / "var" / "log" / "cdp.log"
 
-with open(working_dir + '/shared/config/logging_config.yaml', 'rt') as f:
+with open(Path.cwd() / "shared" / "config" / "logging_config.yaml", 'rt') as f:
     config = yaml.safe_load(f.read())
 
 # Configure the logging module with the config file
