@@ -40,7 +40,7 @@ Continue on to the next step to start the deployment process.
 
 ### (Optional) Advanced configuration
 You can overwrite default parameters as regions or some specific values by editing the <walkthrough-editor-open-file
-    filePath="genai-powered-cdp/installation_scripts/setup.sh">
+    filePath="cloudshell_open/genai-powered-cdp/installation_scripts/setup.sh">
     setup.sh
 </walkthrough-editor-open-file> script.
 
