@@ -1,0 +1,14 @@
+- Question: What are the top 5 products purchased in the last 3 months
+  SQL Query: |-
+    SELECT
+      product_name,
+      SUM(daily_product_purchased_items) AS total_purchased_items
+    FROM
+      `cdp-demo-flocquet.publisher_1_dataset.products_aggregates`
+    WHERE
+      DATE(session_day) >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 MONTH)
+    GROUP BY
+      product_name
+    ORDER BY
+      total_purchased_items DESC
+    LIMIT 5

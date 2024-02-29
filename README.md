@@ -1,2 +1,50 @@
-# genai-powered-cdp
-Demo of a Customer Data Platform using Google Cloud GenAI capabilities to perform data exploration and create user segments
+# Demonstration of using Google Cloud to build a Customer Data Platform for user segmentation with low latency and predictive costs
+
+## Google Disclaimer
+
+This is not an officially supported Google Product
+
+## Introduction
+
+BigQuery is the platform of choice for many companies to store and analyze their data. Especially in the field of Customer Data Platform (CDP), this is a very powerful tool to batch process huge amount of data. However, one pain point with BigQuery when it comes to user facing requests: given that the model is primarily on-demand, costs can grow very fast and are not predictable. An alternative is to use capping of slots used in the BigQuery Enterprise Edition, but then performances can be severely impacted.
+This demo aims at demonstrating that there are ways to mitigate both the costs predictability while still providing low latency.
+
+On top of that, this demosntration aims at showing that Generative AI is also a viable way to address another (more general) pain point with CDP: user exploration for segment definition.
+Most of the times, CDPs offer multiple ways to explore and define the user segments. It ranges from the pre-arranged filters to a custom query language. The issue comes from the fact that the end users of a CDP are marketing personas, who have little to no technical knowledge, and exploring the datasets can become tedious for them, and source of ongoing support from the CDP vendor.
+This project provides a way to query multiple BigQuery datasets and get an answers under 10s, with the ability to understand the intent of the user and select the appropriate tables to query. It then translates the user question into a BigQuery SQL query and executes it.
+
+## Demo
+
+To achieve this, the demo uses the following technologies:
+- Cloud Run
+- Cloud Build
+- Artifact Registry
+- Vertex AI
+- Streamlit Framework
+- BigQuery
+- Cloud SQL with pgvector extension
+- Python 3.10
+
+
+## Repository structure
+
+```
+.
+├── app
+└── config
+└── installation_scripts
+```
+
+- [`/app`](/app): Source code for demo app.  
+- [`/config`](/config): Configuration files used by the application.
+- [`/installation_scripts`](/installation_scripts): Scripts used to install the application.
+
+
+# Environment Setup
+
+Please follow the instructions detailed in the page [`/installation_scripts`](/installation_scripts) to set up the environment.
+
+
+## Getting help
+
+If you have any questions or if you found any problems with this repository, please report through GitHub issues.

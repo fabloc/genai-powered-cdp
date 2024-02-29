@@ -1,7 +1,0 @@
-project_id="cdp-demo-flocquet"
-region="europe-west1"
-artifact_registry_repo="nl2sql"
-service_name="cdp-nl2sql"
-db_name="nl2sql-db"
-db_user_name="nl2sql-admin"
-db_user_password="hr_tutorial"

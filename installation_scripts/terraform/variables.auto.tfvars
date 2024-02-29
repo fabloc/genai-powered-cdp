@@ -1,0 +1,7 @@
+project_id=""
+region=""
+artifact_registry_repo=""
+service_name=""
+db_name="nl2sql-rag-db"
+db_user_name="nl2sql-admin"
+db_user_password="genai_cdp_tutorial"
