@@ -2,8 +2,8 @@ FROM python:3.11
 
 EXPOSE 8501
 
-WORKDIR /shared/
-COPY ./shared/ ./
+WORKDIR /config/
+COPY ./config/ ./
 
 WORKDIR /app/
 COPY ./app/ ./

@@ -6,7 +6,7 @@
 
 # Global variables
 #################################
-PROJECT_ID="project-001"                  # ID of the project where you want to deploy
+PROJECT_ID="genai-cdp-test"                  # ID of the project where you want to deploy
 REGION="europe-west1"                     # Name of the region
 DATASET_NAME="cdp-dataset"                # BigQuery Dataset Name for creation
 ARTIFACT_REGISTRY_REPO="genai-cdp-repo"   # Name of the Artifact Registry Repository
@@ -17,8 +17,8 @@ SERVICE_NAME="genai-cdp"                  # Name of the Cloud Run Service
 # do not modify below here
 
 
-read -p "Enter Project ID: " PROJECT_ID
-read -p "Enter region: " REGION
+# read -p "Enter Project ID: " PROJECT_ID
+# read -p "Enter region: " REGION
 
 echo -e "\n \n"
 bold=$(tput bold)
@@ -127,7 +127,8 @@ check_gcp_constraints
 
 
 # Enabling the services
-gcloud services enable services enable artifactregistry.googleapis.com cloudbuild.googleapis.com run.googleapis.com aiplatform.googleapis.com compute.googleapis.com bigquery.googleapis.com servicenetworking.googleapis.com
+gcloud services enable artifactregistry.googleapis.com cloudbuild.googleapis.com run.googleapis.com aiplatform.googleapis.com compute.googleapis.com bigquery.googleapis.com
+gcloud services enable servicenetworking.googleapis.com cloudresourcemanager.googleapis.com sqladmin.googleapis.com
 
 # if [ ! -d "genai_powered_cdp" ]; then   # Checking the Virtualenv folder exists or not
 #   python3 -m venv genai_powered_cdp    # Creating virtualenv  
@@ -150,10 +151,10 @@ else
 fi
 
 # Updating the Project and Location details in app config and override files
-sed -i "s|project_id = \"\"|project_id = '${PROJECT_ID}'|" genai-powered-cdp/terraform/variables.auto.tfvars
-sed -i "s|region = \"\"|region = '${REGION}'|" genai-powered-cdp/terraform/variables.auto.tfvars
-sed -i "s|artifact_registry_repo = \"\"|artifact_registry_repo = '${ARTIFACT_REGISTRY_REPO}'|" genai-powered-cdp/terraform/variables.auto.tfvars
-sed -i "s|service_name = \"\"|service_name = '${SERVICE_NAME}'|" genai-powered-cdp/terraform/variables.auto.tfvars
+sed -i "s|project_id = \"\"|project_id = \"${PROJECT_ID}\"|" terraform/variables.auto.tfvars
+sed -i "s|region = \"\"|region = \"${REGION}\"|" terraform/variables.auto.tfvars
+sed -i "s|artifact_registry_repo = \"\"|artifact_registry_repo = \"${ARTIFACT_REGISTRY_REPO}\"|" terraform/variables.auto.tfvars
+sed -i "s|service_name = \"\"|service_name = \"${SERVICE_NAME}\"|" terraform/variables.auto.tfvars
 
 # Starting Configuration
 echo "***** Create a new Artifact Repository for our webapp *****"
@@ -164,6 +165,7 @@ echo "***** Setup artefact docker authentication *****"
 gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet > /dev/null
 
 echo "***** Build WebApp Docker image *****"
+cd ..
 gcloud builds submit --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$SERVICE_NAME" > /dev/null
 
 echo "***** Checking Terraform Installation *****"
@@ -176,7 +178,7 @@ else
 fi
 
 echo "***** Initialize Terraform *****"
-cd genai-powered-cdp/terraform
+cd installation_scripts/terraform
 terraform init
 
 echo "***** Deploying Infrastructure using Terraform *****"
