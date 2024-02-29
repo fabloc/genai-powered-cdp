@@ -23,7 +23,7 @@ Before start please make sure you have the following prerequisites:
   - Cloud Run Admin
   - Compute Engine Admin
 
-You can asign missing roles or view your current permissions [here](https://console.cloud.google.com/iam-admin/iam)
+You can assign missing roles or view your current permissions [here](https://console.cloud.google.com/iam-admin/iam)
 
 (Optional) If you are not executing this using cloud shell you will need to install the following:
 - python 3.10 or higher
@@ -40,7 +40,7 @@ Continue on to the next step to start the deployment process.
 
 ### (Optional) Advanced configuration
 You can overwrite default parameters as regions or some specific values by editing the <walkthrough-editor-open-file
-    filePath="cloud-shell-tutorials/tutorial.md">
+    filePath="genai-powered-cdp/installation_scripts/setup.sh">
     setup.sh
 </walkthrough-editor-open-file> script.
 
