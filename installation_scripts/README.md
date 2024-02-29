@@ -8,7 +8,7 @@ Follow the instructions below to install the solution.
 
 Use the Cloud Shell button below to install the solution.
 
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.png)](https://ssh.cloud.google.com/cloudshell/open?cloudshell_git_repo=https://github.com/fabloc/genai-powered-cdp/installation_scripts&cloudshell_tutorial=installation_scripts/tutorial.md)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.png)](https://ssh.cloud.google.com/cloudshell/open?cloudshell_git_repo=https://github.com/fabloc/genai-powered-cdp&cloudshell_tutorial=installation_scripts/tutorial.md)
 
 or, in Cloud Shell, clone this repo, `cd installation-scripts` and run:
 
