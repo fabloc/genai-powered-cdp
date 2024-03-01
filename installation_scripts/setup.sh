@@ -11,6 +11,9 @@ REGION="europe-west1"                     # Name of the region
 DATASET_NAME="cdp-dataset"                # BigQuery Dataset Name for creation
 ARTIFACT_REGISTRY_REPO="genai-cdp-repo"   # Name of the Artifact Registry Repository
 SERVICE_NAME="genai-cdp"                  # Name of the Cloud Run Service
+DATABASE_NAME="nl2sql-rag-db"
+DATABASE_USER="nl2sql-admin"
+DATABASE_PASSWORD=">rJFj8HbN<:ObiEm"
 #################################
 
 
@@ -155,6 +158,14 @@ sed -i "s|project_id = \"\"|project_id = \"${PROJECT_ID}\"|" terraform/variables
 sed -i "s|region = \"\"|region = \"${REGION}\"|" terraform/variables.auto.tfvars
 sed -i "s|artifact_registry_repo = \"\"|artifact_registry_repo = \"${ARTIFACT_REGISTRY_REPO}\"|" terraform/variables.auto.tfvars
 sed -i "s|service_name = \"\"|service_name = \"${SERVICE_NAME}\"|" terraform/variables.auto.tfvars
+sed -i "s|database_name = \"\"|database_name = \"${DATABASE_NAME}\"|" terraform/variables.auto.tfvars
+sed -i "s|database_user = \"\"|database_user = \"${DATABASE_USER}\"|" terraform/variables.auto.tfvars
+sed -i "s|database_password = \"\"|database_password = \"${DATABASE_PASSWORD}\"|" terraform/variables.auto.tfvars
+sed -i "s|project_id =|project_id = ${PROJECT_ID}|" config/config.ini
+sed -i "s|region = |region = ${REGION}|" config/config.ini
+sed -i "s|database_name =|database_name = ${DATABASE_NAME}|" config/config.ini
+sed -i "s|database_user = |database_user = ${DATABASE_USER}|" config/config.ini
+sed -i "s|database_password = |database_password = ${DATABASE_PASSWORD}|" config/config.ini
 
 # Starting Configuration
 echo "***** Create a new Artifact Repository for our webapp *****"
