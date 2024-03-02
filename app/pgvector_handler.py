@@ -29,9 +29,6 @@ class VectorConnectionMgr:
 
         if self.db_connection is None:
 
-            # Run the SQL commands now.
-            asyncio.run(self.add_pgvector_ext())
-
             # initialize Connector object
             db_connector = Connector()
 
@@ -58,58 +55,6 @@ class VectorConnectionMgr:
         return conn
 
 
-    # Configure pgVector extension if the same does not exist
-    async def add_pgvector_ext(self):
-        loop = asyncio.get_running_loop()
-        async with Connector(loop=loop) as connector:
-            # Create connection to Cloud SQL database.
-            conn: asyncpg.Connection = await connector.connect_async(
-                instance_connection_string = cfg.project_id + ":" + cfg.region + ":" + cfg.instance_name,  # Cloud SQL instance connection name
-                driver = "asyncpg",
-                user=cfg.database_user,
-                password=cfg.database_password,
-                db=cfg.database_name,
-                ip_type=IPTypes.PRIVATE
-            )
-
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-
-            await register_vector(conn)
-
-            await conn.close()
-
-
-    # Creating tables 'table_embeddings' and 'sql_embeddings' if they do not exist
-    def create_tables(self):
-
-        sql="""CREATE TABLE IF NOT EXISTS table_embeddings(
-            id varchar(256) PRIMARY KEY,
-            detailed_description TEXT,
-            requestor varchar(50),
-            table_catalog varchar(128),
-            table_schema varchar(128),
-            table_name varchar(50),
-            added_epoch timestamp with time zone,
-            source_type varchar(50),
-            embedding vector(768))"""
-
-        self.execute_query(sql, write=True)
-
-        sql="""CREATE TABLE IF NOT EXISTS sql_embeddings(
-            id varchar(256) PRIMARY KEY,
-            question TEXT,
-            generated_sql TEXT,
-            requestor varchar(50),
-            table_catalog varchar(128),
-            table_schema varchar(128),
-            table_name varchar(50),
-            added_epoch timestamp with time zone,
-            source_type varchar(50),
-            embedding vector(768))"""
-
-        self.execute_query(sql, write=True)
-
-
     def execute_query(self, query: str, write=False, schema: str = 'userbase', group_concat_max_len: int = 102400):
 
         # connect to connection pool
@@ -124,21 +69,62 @@ class VectorConnectionMgr:
     def close_connection(self):
         self.db_connection.close()
 
-def init():
-
-    # create logger
-    global logger
-    logger = logging.getLogger('pgvector_handler')
-
-    global connection_mgr
-    connection_mgr = VectorConnectionMgr(logger)
-
-    # Creating tables
-    connection_mgr.create_tables()
 
 def shutdown():
     connection_mgr.close_connection()
 
+# Configure pgVector extension if the same does not exist
+async def add_pgvector_ext_async():
+    loop = asyncio.get_running_loop()
+    async with Connector(loop=loop) as connector:
+        # Create connection to Cloud SQL database.
+        conn: asyncpg.Connection = await connector.connect_async(
+            instance_connection_string = cfg.project_id + ":" + cfg.region + ":" + cfg.instance_name,  # Cloud SQL instance connection name
+            driver = "asyncpg",
+            user=cfg.database_user,
+            password=cfg.database_password,
+            db=cfg.database_name,
+            ip_type=IPTypes.PRIVATE
+        )
+
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+        await register_vector(conn)
+
+        await conn.close()
+
+def add_pgvector_extension():
+    asyncio.run(add_pgvector_ext_async())
+
+# Creating tables 'table_embeddings' and 'sql_embeddings' if they do not exist
+def create_tables():
+
+    sql="""CREATE TABLE IF NOT EXISTS table_embeddings(
+        id varchar(256) PRIMARY KEY,
+        detailed_description TEXT,
+        requestor varchar(50),
+        table_catalog varchar(128),
+        table_schema varchar(128),
+        table_name varchar(50),
+        added_epoch timestamp with time zone,
+        source_type varchar(50),
+        embedding vector(768))"""
+
+    connection_mgr.execute_query(sql, write=True)
+
+    sql="""CREATE TABLE IF NOT EXISTS sql_embeddings(
+        id varchar(256) PRIMARY KEY,
+        question TEXT,
+        generated_sql TEXT,
+        requestor varchar(50),
+        table_catalog varchar(128),
+        table_schema varchar(128),
+        table_name varchar(50),
+        added_epoch timestamp with time zone,
+        source_type varchar(50),
+        embedding vector(768))"""
+
+    connection_mgr.execute_query(sql, write=True)
 
 # Configure pgVector as the Vector Store
 def text_embedding(question):
@@ -427,3 +413,8 @@ def get_tables_colums_vector(question, question_text_embedding):
         table_results_array.append(r[1])
 
     return '\n'.join(table_results_array)
+
+# create logger
+logger = logging.getLogger('pgvector_handler')
+
+connection_mgr = VectorConnectionMgr(logger)

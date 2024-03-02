@@ -58,7 +58,6 @@ embeddings_model = models_config['embeddings_model']
 models_timeout = models_config.getint('models_timeout') if 'models_timeout' in models_config else 20
 
 # Vector DB variables
-update_db_at_startup = vector_config.getboolean('update_db_at_startup')
 database_password = vector_config['database_password']
 instance_name = vector_config['instance_name']
 database_name = vector_config['database_name']
