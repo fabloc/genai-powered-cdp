@@ -6,7 +6,7 @@
 
 # Global variables
 #################################
-PROJECT_ID="genai-cdp-test"                  # ID of the project where you want to deploy
+PROJECT_ID="genai-cdp-project"                  # ID of the project where you want to deploy
 REGION="europe-west1"                     # Name of the region
 DATASET_NAME="cdp-dataset"                # BigQuery Dataset Name for creation
 ARTIFACT_REGISTRY_REPO="genai-cdp-repo"   # Name of the Artifact Registry Repository
@@ -18,29 +18,6 @@ DATABASE_PASSWORD=">rJFj8HbN<:ObiEm"
 
 
 # do not modify below here
-
-
-# read -p "Enter Project ID: " PROJECT_ID
-# read -p "Enter region: " REGION
-
-echo -e "\n \n"
-bold=$(tput bold)
-normal=$(tput sgr0)
-echo -e "Here are the names that will be used for creating resources \n"
-echo -e "BIGQUERY DATASET_NAME: ${bold}${DATASET_NAME}${normal} \ARTIFACT_REGISTRY_REPO: ${bold}${ARTIFACT_REGISTRY_REPO}${normal} \SERVICE_NAME: ${bold}${SERVICE_NAME}${normal}"
-echo -e "\nDo you wish to add postfix ? enter 1 for Yes and 2 for No"
-echo -e "\n Note: If you are reruning the automation, use names like earlier"
-select yn in "Yes" "No"; do
-    case $yn in
-        Yes ) read -p "Enter Postfix: " POSTFIX
-              DATASET_NAME="${DATASET_NAME}_${POSTFIX}"
-              ARTIFACT_REGISTRY_REPO="${ARTIFACT_REGISTRY_REPO}_${POSTFIX}"
-              SERVICE_NAME="${SERVICE_NAME}_${POSTFIX}"
-              break ;;
-        No ) echo "Using same names for setup"
-             break ;;
-    esac
-done
 
 function check_if_project_id_is_setup() {
     if [ -z "$PROJECT_ID" ]; then
@@ -145,13 +122,8 @@ gcloud services enable servicenetworking.googleapis.com cloudresourcemanager.goo
 #-----BigQuery Setup -----
 # python3 genai_marketing_env_setup.py $PROJECT_ID $REGION $DATASET_NAME
 
-if [ ! -d "genai-powered-cdp" ]; then   # Checking the github code folder exists or not
-  git clone https://github.com/fabloc/genai-powered-cdp   # cloning the genai-for-marketing code from github
-else
-  rm -rf genai-for-marketing
-  git clone https://github.com/fabloc/genai-powered-cdp
-
-fi
+cp -f variables.auto.tfvars.tmpl terraform/variables.auto.tfvars
+cp -f config.ini.tmpl ../config/config.ini
 
 # Updating the Project and Location details in app config and override files
 sed -i "s|project_id = \"\"|project_id = \"${PROJECT_ID}\"|" terraform/variables.auto.tfvars
