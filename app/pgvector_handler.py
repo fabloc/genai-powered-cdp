@@ -126,6 +126,21 @@ def create_tables():
 
     connection_mgr.execute_query(sql, write=True)
 
+def create_indexes():
+    # Create an HNSW index on the `table_embeddings` table.
+    sql = f"""CREATE INDEX ON table_embeddings
+    USING hnsw(embedding {cfg.operator})
+    WITH (m = {cfg.m}, ef_construction = {cfg.ef_construction})
+    """
+    connection_mgr.execute_query(sql, write=True)
+
+    # Create an HNSW index on the `sql_embeddings` table.
+    sql = f"""CREATE INDEX ON sql_embeddings
+    USING hnsw(embedding {cfg.operator})
+    WITH (m = {cfg.m}, ef_construction = {cfg.ef_construction})
+    """
+    connection_mgr.execute_query(sql, write=True)
+
 # Configure pgVector as the Vector Store
 def text_embedding(question):
     from vertexai.language_models import TextEmbeddingModel

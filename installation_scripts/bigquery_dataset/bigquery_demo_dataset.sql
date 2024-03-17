@@ -1,101 +1,159 @@
--- Mise à jour de la table users
-CREATE TABLE IF NOT EXISTS demo.users (
-    user_id INT64 NOT NULL,
-    username STRING,
-    email STRING,
-    first_name STRING,
-    last_name STRING,
-    registration_date DATE,
-    birth_date DATE,
-    country STRING
+-- Create a variable containing the total number of products
+DECLARE total_products_number DEFAULT (SELECT COUNT(DISTINCT id) FROM {{ dataset_id }}.products);
+
+-- Create a variable containing the number of users to use for events generation
+DECLARE users_number DEFAULT (SELECT {{ users_percentage }} * COUNT(DISTINCT id) / 100 FROM {{ dataset_id }}.users);
+
+CREATE TEMP FUNCTION rand_date(min_date DATE,max_date DATE) AS ( 
+  TIMESTAMP_SECONDS(
+    CAST(
+      ROUND(UNIX_SECONDS(CAST(min_date AS TIMESTAMP)) + rand() * (UNIX_SECONDS(CAST(max_date AS TIMESTAMP)) - UNIX_SECONDS(CAST(min_date AS TIMESTAMP))))
+    AS INT64)
+  ) 
 );
 
--- Mise à jour de la table products (aucun changement suggéré ici, mais vous pourriez vouloir ajouter plus tard)
-CREATE TABLE IF NOT EXISTS demo.products (
-    product_id INT64 NOT NULL,
-    product_name STRING,
-    product_description STRING
-);
+CREATE TEMP FUNCTION generate_event_types(session_creation_date TIMESTAMP, total_products INT64)
+RETURNS ARRAY<STRUCT<event_type STRING, product_id INT64, created_at TIMESTAMP, sequence_number INT64>>
+LANGUAGE js
+AS r"""
 
--- Mise à jour de la table comments avec une note de produit
-CREATE TABLE IF NOT EXISTS demo.comments (
-    comment_id INT64 NOT NULL,
-    user_id INT64,
-    product_id INT64,
-    comment_text STRING,
-    comment_date DATE,
-    product_rating INT64
-);
+  function randomDate(start, end) {
+    var shiftDate = new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+    return shiftDate;
+  }
 
+  const max_session_time = 30
 
--- Insert users data
-INSERT INTO demo.users (user_id, username, email, first_name, last_name, registration_date, birth_date, country) VALUES
-(1, 'Alex', 'alex@example.com', 'Alex', 'Johnson', '2021-01-15', '1990-04-01', 'USA'),
-(2, 'Charlie', 'charlie@example.com', 'Charlie', 'Brown', '2021-02-20', '1985-05-12', 'Canada'),
-(3, 'Jordan', 'jordan@example.com', 'Jordan', 'Davis', '2021-03-25', '1992-08-23', 'UK'),
-(4, 'Taylor', 'taylor@example.com', 'Taylor', 'Smith', '2021-04-30', '1989-11-09', 'Australia'),
-(5, 'Morgan', 'morgan@example.com', 'Morgan', 'Lee', '2021-05-05', '1993-02-17', 'New Zealand'),
-(6, 'Casey', 'casey@example.com', 'Casey', 'Wong', '2021-06-10', '1988-07-26', 'Singapore'),
-(7, 'Riley', 'riley@example.com', 'Riley', 'Martin', '2021-07-15', '1995-10-30', 'Ireland'),
-(8, 'Quinn', 'quinn@example.com', 'Quinn', 'ONeil', '2021-08-20', '1996-03-15', 'USA'),
-(9, 'Jamie', 'jamie@example.com', 'Jamie', 'Garcia', '2021-09-25', '1984-06-04', 'Mexico'),
-(10, 'Drew', 'drew@example.com', 'Drew', 'Barrett', '2021-10-30', '1991-12-22', 'USA'),
-(11, 'Avery', 'avery@example.com', 'Avery', 'Chen', '2021-11-04', '1987-01-13', 'China'),
-(12, 'Reese', 'reese@example.com', 'Reese', 'Kumar', '2021-12-09', '1994-09-08', 'India'),
-(13, 'Peyton', 'peyton@example.com', 'Peyton', 'Lopez', '2022-01-14', '1990-05-27', 'Spain'),
-(14, 'Skyler', 'skyler@example.com', 'Skyler', 'Müller', '2022-02-18', '1993-07-19', 'Germany'),
-(15, 'Dakota', 'dakota@example.com', 'Dakota', 'Suzuki', '2022-03-25', '1989-03-03', 'Japan'),
-(16, 'Devon', 'devon@example.com', 'Devon', 'Kim', '2022-04-29', '1995-11-11', 'South Korea'),
-(17, 'Leslie', 'leslie@example.com', 'Leslie', 'Andersson', '2022-05-04', '1986-02-14', 'Sweden'),
-(18, 'Kennedy', 'kennedy@example.com', 'Kennedy', 'Silva', '2022-06-09', '1992-10-26', 'Brazil'),
-(19, 'Jordan', 'jordanb@example.com', 'Jordan', 'Bishop', '2022-07-14', '1990-08-05', 'USA'),
-(20, 'Alex', 'alexc@example.com', 'Alex', 'Cameron', '2022-08-19', '1988-04-16', 'UK');
+  session = [];
+  total_products = total_products - 1;
 
+  // Randomly determine the length of eventTypes between 0 and 6
+  length = Math.floor(Math.random() * 7);
 
--- Insert products data
-INSERT INTO demo.products (product_id, product_name, product_description) VALUES
-(18, 'Electric Kettle', 'Fast boiling kettle with temperature control.'),
-(19, 'Smart Thermostat', 'Control your home temperature remotely.'),
-(20, 'Fitness Band', 'Track your fitness activity and goals.'),
-(21, 'Smart Lock', 'Keyless entry and remote door locking.'),
-(22, 'Digital Camera', 'Capture moments with high-quality photos.'),
-(23, 'Gaming Keyboard', 'Mechanical keyboard for professional gamers.'),
-(24, 'Projector', 'HD projector for movies and presentations.'),
-(25, 'Smart Scale', 'Digital scale with health metrics integration.'),
-(26, 'Electric Toothbrush', 'Smart toothbrush with app integration.'),
-(27, 'GPS Tracker', 'Keep track of your valuable items.'),
-(28, 'Smart Light Bulb', 'Control lighting from your smartphone.'),
-(29, 'Air Purifier', 'Improve your indoor air quality.'),
-(30, 'Smart Watch', 'Next-gen smartwatch with new features.'),
-(31, 'Action Cam', 'Capture your outdoor adventures.'),
-(32, 'Noise Cancelling Earbuds', 'Immersive sound experience with no distractions.'),
-(33, 'Wireless Charging Pad', 'Conveniently charge your devices wirelessly.'),
-(34, 'Smart Water Bottle', 'Track your hydration with a smart bottle.'),
-(35, 'Smart Glasses', 'Wearable tech for augmented reality experiences.'),
-(36, 'Weather Station', 'Monitor local weather conditions in real-time.'),
-(37, 'Smart Mirror', 'Interactive mirror with fitness and health tracking.');
+  current_created_at = new Date(session_creation_date);
+  max_created_at = new Date(new Date(current_created_at).getTime() + max_session_time * 60000);
 
+  // Ensure session is at least 2 if it's not 0
+  if( length != 0 ) {
 
--- Continuation de l'insertion des commentaires avec ratings
-INSERT INTO demo.comments (comment_id, user_id, product_id, comment_text, comment_date, product_rating) VALUES
-(19, 1, 18, 'Makes morning coffee a breeze.', '2023-02-19', 2),
-(20, 2, 19, 'Easily the best upgrade to my home.', '2023-02-20', 5),
-(21, 3, 20, 'Helped me stay on track with my fitness.', '2023-02-21', 4),
-(22, 4, 21, 'The convenience is unmatched.', '2023-02-22', 4),
-(23, 5, 22, 'Takes stunning pictures every time.', '2023-02-23', 1),
-(24, 6, 23, 'A must-have for any serious gamer.', '2023-02-24', 2),
-(25, 7, 24, 'Movie nights have never been better.', '2023-02-25', 4),
-(26, 8, 25, 'Really helps me understand my health better.', '2023-02-26', 5),
-(27, 9, 26, 'Never going back to manual brushes.', '2023-02-27', 4),
-(28, 10, 27, 'Found my lost luggage in no time.', '2023-02-28', 5),
-(29, 11, 28, 'Lighting my room has never been this fun.', '2023-03-01', 5),
-(30, 12, 29, 'My allergies have significantly improved.', '2023-03-02', 1),
-(31, 13, 30, 'The new features are incredible.', '2023-03-03', 4),
-(32, 14, 31, 'Rugged and reliable for all my hikes.', '2023-03-04', 5),
-(33, 15, 32, 'Music sounds better without the noise.', '2023-03-05', 4),
-(34, 16, 33, 'So convenient for my nightstand.', '2023-03-06', 5),
-(35, 17, 34, 'I m finally drinking enough water daily.', '2023-03-07', 3),
-(36, 18, 35, 'Feels like the future is here.', '2023-03-08', 4),
-(37, 19, 36, 'I can keep an eye on the weather for my garden.', '2023-03-09', 5),
-(38, 20, 37, 'Morning routines are now fun and informative.', '2023-03-10', 5);
+    // Generate the first element of session
+    i = 0;
+    if (Math.random() <= 0.5) {
+      current_created_at = randomDate(current_created_at, max_created_at);
+      session.push({created_at: current_created_at, event_type: 'home', product_id: 0, sequence_number: i+1});
+      i++;
+    }
 
+    // Generate the remaining elements of session
+    while (i < length-1) {
+      if (Math.random() < 0.5) {
+        product_id = Math.floor(Math.random() * total_products) + 1;
+        current_created_at = randomDate(current_created_at, max_created_at);
+        session.push({created_at: current_created_at, event_type: 'department', product_id: product_id, sequence_number: i+1});
+        current_created_at = randomDate(current_created_at, max_created_at);
+        session.push({created_at: current_created_at, event_type: 'product', product_id: product_id, sequence_number: i+2});
+        i += 2;
+      } else {
+        current_created_at = randomDate(current_created_at, max_created_at);
+        session.push({created_at: current_created_at, event_type: 'product', product_id: Math.floor(Math.random() * total_products) + 1, sequence_number: i+1});
+        i++;
+      }
+    }
+
+    choice = Math.random();
+    if(length > 2) {
+      session[length - 2] = choice < 0.5 ? {created_at: current_created_at, event_type: 'cart', product_id: 0, sequence_number: length - 1} : session[length - 2];
+    }
+
+    if (length > 1 && session[length - 2].event_type == 'cart') {
+      current_created_at = randomDate(current_created_at, max_created_at);
+      choice = Math.random();
+      session[length - 1] = {created_at: current_created_at, event_type: choice < 0.5 ? 'cancel' : 'purchase', product_id: 0, sequence_number: length};
+      i++;
+    }
+
+    if (i < length) {
+      current_created_at = randomDate(current_created_at, max_created_at);
+      session.push({created_at: current_created_at, event_type: 'product', product_id: Math.floor(Math.random() * total_products) + 1, sequence_number: i+1});
+    }
+  }
+  return session;
+""";
+
+CREATE OR REPLACE TABLE {{ dataset_id }}.events
+PARTITION BY
+  DATE_TRUNC(session_created_at, DAY)
+AS (
+
+  WITH
+
+  traffic_sources AS (
+      SELECT ["Search", "Organic", "Email", "Facebook", "Display"] as sources_list
+  ),
+
+  products_by_users AS (
+    SELECT
+      users.id AS user_id,
+      -- Each session is a Struct of attribute, among which an Array containing the events for the session, generated using a javascript script
+      ARRAY(
+        -- Use a SubQuery to precompute the session creation date and reuse it as input to the session events generation UDF
+        SELECT AS STRUCT
+          session_id,
+          traffic_source,
+          session_created_at,
+          generate_event_types(session_created_at, total_products_number) AS session
+        FROM (
+          SELECT
+            (SELECT sources_list[mod(CAST(5*rand() as int64), 5)] FROM traffic_sources) traffic_source,
+            CAST(rand_date("{{ events_start_date }}", "{{ events_end_date }}") AS TIMESTAMP) session_created_at,
+            GENERATE_UUID() AS session_id
+          -- Create an array of a random number of sessions (between 0 and a user defined variable) using an Unnest trick to loop through the sessions.
+          FROM UNNEST(GENERATE_ARRAY(1, CAST({{ max_sessions_per_user }} * RAND() AS INT64)))
+        )
+      ) AS sessions
+    FROM {{ dataset_id }}.users AS users_number
+    -- Below is equivalent to 'LIMIT users_number' (LIMIT does not support variables)
+    QUALIFY ROW_NUMBER() OVER() < (SELECT users_number)
+  )
+
+  SELECT
+    user_id,
+    session_id,
+    traffic_source,
+    flat_sessions.session_created_at AS session_created_at,
+    SUM(
+      CASE
+        -- Check whether 'event_type' has value 'purchase' in the session events. If yes, add the costs of all session rows
+        WHEN EXISTS(SELECT * FROM flat_sessions.session AS session WHERE event_type = 'purchase') THEN
+          cost
+        ELSE
+          0
+      END
+    ) AS total_cost,
+    ARRAY_AGG(STRUCT(
+      session_events.event_type AS event_type,
+      session_events.product_id AS product_id,
+      CAST(session_events.created_at AS TIMESTAMP) AS created_at,
+      session_events.sequence_number AS sequence_number,
+      (CASE
+        WHEN session_events.event_type = 'department' THEN
+          CONCAT('/department/', REPLACE(LOWER(department), ' ', ''), '/category/', REPLACE(LOWER(category), ' ', ''), '/brand/', REPLACE(LOWER(brand), ' ', ''))
+        WHEN session_events.event_type = 'product' THEN
+          CONCAT('/product/', product_id)
+      END) AS uri,
+      cost AS cost,
+      category AS category,
+      name AS name,
+      brand AS brand,
+      department AS department
+      )) AS session
+  FROM
+    products_by_users,
+    -- Unnest the array of session 'sessions', and then unnest the events inside the sessions
+    UNNEST(sessions) AS flat_sessions,
+    UNNEST(flat_sessions.session) AS session_events
+  LEFT JOIN {{ dataset_id }}.products AS products
+  ON session_events.product_id = products.id
+  GROUP BY user_id, session_id, session_created_at, traffic_source
+
+)

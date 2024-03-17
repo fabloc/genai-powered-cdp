@@ -14,6 +14,7 @@ SERVICE_NAME="genai-cdp"                  # Name of the Cloud Run Service
 DATABASE_NAME="nl2sql-rag-db"
 DATABASE_USER="nl2sql-admin"
 DATABASE_PASSWORD=">rJFj8HbN<:ObiEm"
+BIGQUERY_DATASET="cdp_demo"
 #################################
 
 
@@ -110,18 +111,6 @@ check_gcp_constraints
 gcloud services enable artifactregistry.googleapis.com cloudbuild.googleapis.com run.googleapis.com aiplatform.googleapis.com compute.googleapis.com bigquery.googleapis.com
 gcloud services enable servicenetworking.googleapis.com cloudresourcemanager.googleapis.com sqladmin.googleapis.com
 
-# if [ ! -d "genai_powered_cdp" ]; then   # Checking the Virtualenv folder exists or not
-#   python3 -m venv genai_powered_cdp    # Creating virtualenv  
-# fi
-
-# source genai_powered_cdp/bin/activate   # activate Virtualenv
-
-# installing required python packages
-# pip install -U google-cloud-datacatalog google-cloud-storage google-cloud-bigquery numpy google-api-python-client google.cloud google.auth google-cloud-discoveryengine google-cloud-dialogflow-cx
-
-#-----BigQuery Setup -----
-# python3 genai_marketing_env_setup.py $PROJECT_ID $REGION $DATASET_NAME
-
 cp -f variables.auto.tfvars.tmpl terraform/variables.auto.tfvars
 cp -f config.ini.tmpl ../config/config.ini
 
@@ -170,3 +159,23 @@ terraform apply -auto-approve
 echo "***** Cloud RUN URL *****"
 APP_URL=$(gcloud run services describe $SERVICE_NAME --region="$REGION" --format="value(status.url)")
 echo $APP_URL
+
+echo "***** Initializing Cloud Instance *****"
+
+cd app
+
+if [ ! -d ".venv" ]; then   # Checking the Virtualenv folder exists or not
+   python3 -m venv .venv    # Creating virtualenv  
+fi
+
+source .venv/bin/activate   # activate Virtualenv
+
+# installing required python packages
+pip install -r requirements.txt
+
+#----- Vector DB initialization -----
+python3 init_pgvector.py
+
+#----- BigQuery Dataset / Tables generation -----
+cd ../installation_scripts/bigquery_dataset
+python3 init_bigquery.py

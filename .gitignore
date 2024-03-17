@@ -4,5 +4,8 @@
 test_*
 .*
 __pycache__
+config.ini
+variables.auto.tfvars
 terraform.tfstate*
 terraform/.terraform.lock.hcl
+generated.sql

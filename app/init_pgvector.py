@@ -246,6 +246,9 @@ logger = logging.getLogger('init_pgvector')
 # Add the pgvector extension to the Cloud SQL instance
 pgvector_handler.add_pgvector_extension()
 
+# Create indexes on the tables
+pgvector_handler.create_indexes()
+
 # Create tables
 pgvector_handler.create_tables()
 
