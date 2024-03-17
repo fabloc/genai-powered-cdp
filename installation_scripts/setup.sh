@@ -15,6 +15,7 @@ DATABASE_NAME="nl2sql-rag-db"
 DATABASE_USER="nl2sql-admin"
 DATABASE_PASSWORD=">rJFj8HbN<:ObiEm"
 BIGQUERY_DATASET="cdp_demo"
+EVENTS_START_DATE="2020-01-01"
 #################################
 
 
@@ -113,6 +114,7 @@ gcloud services enable servicenetworking.googleapis.com cloudresourcemanager.goo
 
 cp -f variables.auto.tfvars.tmpl terraform/variables.auto.tfvars
 cp -f config.ini.tmpl ../config/config.ini
+cp -f bigquery_dataset/config.ini.tmpl bigquery_dataset/config.ini
 
 # Updating the Project and Location details in app config and override files
 sed -i "s|project_id = \"\"|project_id = \"${PROJECT_ID}\"|" terraform/variables.auto.tfvars
@@ -127,6 +129,10 @@ sed -i "s|region =|region = ${REGION}|" ../config/config.ini
 sed -i "s|database_name =|database_name = ${DATABASE_NAME}|" ../config/config.ini
 sed -i "s|database_user =|database_user = ${DATABASE_USER}|" ../config/config.ini
 sed -i "s|database_password =|database_password = ${DATABASE_PASSWORD}|" ../config/config.ini
+sed -i "s|dataset_id =|dataset_id = ${BIGQUERY_DATASET}|" bigquery_dataset/config.ini
+sed -i "s|region =|region = ${REGION}|" bigquery_dataset/config.ini
+sed -i "s|project_id =|project_id = ${PROJECT_ID}|" bigquery_dataset/config.ini
+sed -i "s|events_start_date =|region = ${EVENTS_START_DATE}|" bigquery_dataset/config.ini
 
 # Starting Configuration
 echo "***** Create a new Artifact Repository for our webapp *****"
@@ -160,8 +166,6 @@ echo "***** Cloud RUN URL *****"
 APP_URL=$(gcloud run services describe $SERVICE_NAME --region="$REGION" --format="value(status.url)")
 echo $APP_URL
 
-echo "***** Initializing Cloud Instance *****"
-
 cd app
 
 if [ ! -d ".venv" ]; then   # Checking the Virtualenv folder exists or not
@@ -173,9 +177,10 @@ source .venv/bin/activate   # activate Virtualenv
 # installing required python packages
 pip install -r requirements.txt
 
-#----- Vector DB initialization -----
-python3 init_pgvector.py
-
-#----- BigQuery Dataset / Tables generation -----
+echo "***** Initializing Bigquerywith new Dataset and all required Tables *****"
 cd ../installation_scripts/bigquery_dataset
 python3 init_bigquery.py
+
+echo "***** Initializing PgVector Database with tables definitions and samples *****"
+cd ../../../app
+python3 init_pgvector.py

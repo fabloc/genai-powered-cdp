@@ -111,7 +111,7 @@ AS (
           FROM UNNEST(GENERATE_ARRAY(1, CAST({{ max_sessions_per_user }} * RAND() AS INT64)))
         )
       ) AS sessions
-    FROM {{ dataset_id }}.users AS users_number
+    FROM {{ dataset_id }}.users AS users
     -- Below is equivalent to 'LIMIT users_number' (LIMIT does not support variables)
     QUALIFY ROW_NUMBER() OVER() < (SELECT users_number)
   )

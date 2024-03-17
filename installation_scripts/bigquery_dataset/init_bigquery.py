@@ -45,6 +45,8 @@ client = bigquery.Client(project=project_id, location=region)
 # Setup of the Dataset
 dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
 dataset = bigquery.Dataset(dataset_ref)
+dataset.location = region
+dataset.storage_billing_model = 'PHYSICAL'
 
 try:
     client.create_dataset(dataset)
@@ -53,6 +55,7 @@ except Conflict:
     print(f"Dataset {dataset_id} already exists.")
 
 #---------- Create Users table ----------
+print("Importing Users table...")
 uri = "gs://genai-cdp-demo/users/users-*.csv"
 table_id = project_id + '.' + dataset_id + '.users'
 
@@ -74,8 +77,10 @@ load_job = client.load_table_from_uri(
 )  # Make an API request.
 
 load_job.result()  # Waits for the job to complete.
+print("Successfully imported Users table.")
 
 #---------- Create Products table ----------
+print("Importing Products table...")
 uri = "gs://genai-cdp-demo/products/products.csv"
 table_id = project_id + '.' + dataset_id + '.products'
 
@@ -97,6 +102,7 @@ load_job = client.load_table_from_uri(
 )  # Make an API request.
 
 load_job.result()  # Waits for the job to complete.
+print("Successfully imported Products table.")
 
 # Reading SQL script from the file
 with open(sql_file_path, "r") as sql_file:
@@ -107,17 +113,7 @@ with open(sql_file_path, "r") as sql_file:
 with open("generated.sql", "w") as text_file:
     text_file.write(sql_script)
 
-# Split the script in multiples commands if needed
-sql_commands = sql_script.split(';')[:-1]
-
-# Run every SQL commands in the file
-# for command in sql_commands:
-#     if command.strip():  # Check if the command is not empty
-#         query_job = client.query(command, location=region)
-#         query_job.result()  # Wait for the end of the request
-#         print("SQL Command in success.")
-
-query_job = client.query(sql_commands, location=region)
+query_job = client.query(sql_script, location=region)
 query_job.result()  # Wait for the end of the request
 
 print("All the SQL commands in success.")
