@@ -50,7 +50,7 @@ class VectorConnectionMgr:
             user=cfg.database_user,
             password=cfg.database_password,
             db=cfg.database_name,
-            ip_type=IPTypes.PRIVATE
+            ip_type=cfg.sql_ip_type
         )
         return conn
 
@@ -84,7 +84,7 @@ async def add_pgvector_ext_async():
             user=cfg.database_user,
             password=cfg.database_password,
             db=cfg.database_name,
-            ip_type=IPTypes.PRIVATE
+            ip_type=cfg.sql_ip_type
         )
 
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -246,7 +246,7 @@ def get_tables_ann_pgvector(question: str, query: str, group_concat_max_len: int
             )
             SELECT id, detailed_description, similarity
             FROM vector_matches
-            where table_schema=\'{cfg.schema}\'
+            where table_schema=\'{cfg.dataset_id}\'
             '''
 
     logger.debug("SQL: " + sql)
@@ -416,7 +416,7 @@ def get_tables_colums_vector(question, question_text_embedding):
                             )
                             SELECT id, detailed_description, similarity
                             FROM vector_matches
-                            where table_schema=\'{cfg.schema}\'
+                            where table_schema=\'{cfg.dataset_id}\'
                             and requestor=\'{cfg.auth_user}\'
                             and table_catalog=\'{cfg.dataproject_id}\'
                             '''

@@ -1,18 +1,18 @@
 [GOOGLE_CLOUD]
 project_id =
 region =
-dataproject_id =
-auth_user = admin@fabienlocquet.altostrat.com
+auth_user =
 
 [TABLES]
 # TABLES contain the tables to be used for SQL generation.
 # Enter an empty table list when all tables in the dataset should be used
 source_type = BigQuery
-tables = ["hll_user_aggregates", "products_aggregates"]
 # tables = ["hll_user_aggregates"]
-# BQ Schema (DATASET) where tables leave
-schema = publisher_1_dataset
-user_dataset = ${GOOGLE_CLOUD:dataproject_id}.${schema}
+# BQ Project and Dataset where tables live
+project_id_data =
+dataset_id =
+tables = ["hll_user_aggregates", "products_aggregates"]
+user_dataset = ${project_id_data}.${dataset_id}
 
 [EXECUTION]
 # Execution Parameters
@@ -43,6 +43,7 @@ models_timeout = 20
 update_db_at_startup = True
 database_password =
 instance_name = pgvector-db
+sql_ip_type = PRIVATE
 database_name =
 database_user =
 num_table_matches = 5
@@ -53,4 +54,4 @@ num_sql_matches=3
 # @markdown Create an HNSW index
 m =  24
 ef_construction = 100
-operator =  vector_cosine_ops  # ["vector_cosine_ops", "vector_l2_ops", "vector_ip_ops"]
+operator =  vector_cosine_ops

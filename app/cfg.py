@@ -24,14 +24,14 @@ analytics_config = config['ANALYTICS']
 # Google Cloud variables
 project_id = gcp_config['project_id']
 region = gcp_config['region']
-dataproject_id = gcp_config['dataproject_id']
 auth_user = gcp_config['auth_user']
 
 # Tables variables
 source_type = tables_config['source_type']
 tables = tables_config['tables']
 tables = json.loads(tables)
-schema = tables_config['schema']
+dataproject_id = tables_config['project_id_data']
+dataset_id = tables_config['dataset_id']
 user_dataset = tables_config['user_dataset']
 
 # Execution variables
@@ -60,6 +60,8 @@ models_timeout = models_config.getint('models_timeout') if 'models_timeout' in m
 # Vector DB variables
 database_password = vector_config['database_password']
 instance_name = vector_config['instance_name']
+# sql_ip_type can be either "PRIVATE" or "PUBLIC"
+sql_ip_type = vector_config['sql_ip_type'] if 'sql_ip_type' in vector_config else "PRIVATE"
 database_name = vector_config['database_name']
 database_user = vector_config['database_user']
 num_table_matches = vector_config.getint('num_table_matches')

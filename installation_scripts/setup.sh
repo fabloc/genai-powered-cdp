@@ -6,11 +6,11 @@
 
 # Global variables
 #################################
-PROJECT_ID="genai-cdp-project"                  # ID of the project where you want to deploy
-REGION="europe-west1"                     # Name of the region
-DATASET_NAME="cdp-dataset"                # BigQuery Dataset Name for creation
-ARTIFACT_REGISTRY_REPO="genai-cdp-repo"   # Name of the Artifact Registry Repository
-SERVICE_NAME="genai-cdp"                  # Name of the Cloud Run Service
+PROJECT_ID="genai-cdp-test-3"                   # ID of the project where you want to deploy
+REGION="europe-west1"                           # Name of the region
+AUTH_USER="admin@fabienlocquet.altostrat.com"   # User that will run the application
+ARTIFACT_REGISTRY_REPO="genai-cdp-repo"         # Name of the Artifact Registry Repository
+SERVICE_NAME="genai-cdp"                        # Name of the Cloud Run Service
 DATABASE_NAME="nl2sql-rag-db"
 DATABASE_USER="nl2sql-admin"
 DATABASE_PASSWORD=">rJFj8HbN<:ObiEm"
@@ -124,15 +124,19 @@ sed -i "s|service_name = \"\"|service_name = \"${SERVICE_NAME}\"|" terraform/var
 sed -i "s|db_name = \"\"|db_name = \"${DATABASE_NAME}\"|" terraform/variables.auto.tfvars
 sed -i "s|db_user_name = \"\"|db_user_name = \"${DATABASE_USER}\"|" terraform/variables.auto.tfvars
 sed -i "s|db_user_password = \"\"|db_user_password = \"${DATABASE_PASSWORD}\"|" terraform/variables.auto.tfvars
+sed -i "s|provisioning_ip_address = \"\"|provisioning_ip_address = \"$(wget http://ipinfo.io/ip -qO - --timeout=20)\"|" terraform/variables.auto.tfvars
 sed -i "s|project_id =|project_id = ${PROJECT_ID}|" ../config/config.ini
 sed -i "s|region =|region = ${REGION}|" ../config/config.ini
+sed -i "s|auth_user =|auth_user = ${AUTH_USER}|" ../config/config.ini
+sed -i "s|project_id_data =|project_id_data = ${PROJECT_ID}|" ../config/config.ini
+sed -i "s|dataset_id =|dataset_id = ${BIGQUERY_DATASET}|" ../config/config.ini
 sed -i "s|database_name =|database_name = ${DATABASE_NAME}|" ../config/config.ini
 sed -i "s|database_user =|database_user = ${DATABASE_USER}|" ../config/config.ini
 sed -i "s|database_password =|database_password = ${DATABASE_PASSWORD}|" ../config/config.ini
 sed -i "s|dataset_id =|dataset_id = ${BIGQUERY_DATASET}|" bigquery_dataset/config.ini
 sed -i "s|region =|region = ${REGION}|" bigquery_dataset/config.ini
 sed -i "s|project_id =|project_id = ${PROJECT_ID}|" bigquery_dataset/config.ini
-sed -i "s|events_start_date =|region = ${EVENTS_START_DATE}|" bigquery_dataset/config.ini
+sed -i "s|events_start_date =|events_start_date = ${EVENTS_START_DATE}|" bigquery_dataset/config.ini
 
 # Starting Configuration
 echo "***** Create a new Artifact Repository for our webapp *****"
@@ -166,7 +170,7 @@ echo "***** Cloud RUN URL *****"
 APP_URL=$(gcloud run services describe $SERVICE_NAME --region="$REGION" --format="value(status.url)")
 echo $APP_URL
 
-cd app
+cd ../../app
 
 if [ ! -d ".venv" ]; then   # Checking the Virtualenv folder exists or not
    python3 -m venv .venv    # Creating virtualenv  
@@ -177,10 +181,13 @@ source .venv/bin/activate   # activate Virtualenv
 # installing required python packages
 pip install -r requirements.txt
 
-echo "***** Initializing Bigquerywith new Dataset and all required Tables *****"
-cd ../installation_scripts/bigquery_dataset
-python3 init_bigquery.py
+# echo "***** Initializing Bigquerywith new Dataset and all required Tables *****"
+cd ..
+python3 installation_scripts/bigquery_dataset/init_bigquery.py
 
 echo "***** Initializing PgVector Database with tables definitions and samples *****"
-cd ../../../app
-python3 init_pgvector.py
+sed -i "s|sql_ip_type = PRIVATE|sql_ip_type = PUBLIC|" config/config.ini
+python3 app/init_pgvector.py
+
+echo "***** Removing public IP from Cloud SQL instance *****"
+gcloud sql instances patch pgvector-db --no-assign-ip

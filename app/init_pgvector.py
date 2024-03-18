@@ -122,7 +122,7 @@ def insert_sample_queries_lookup(tables_list):
                     for sql_query in queries_samples[0]:
                         question = sql_query['Question']
                         question_text_embedding = pgvector_handler.text_embedding(question)
-                        pgvector_handler.add_vector_sql_collection(cfg.schema, sql_query['Question'], sql_query['SQL Query'], question_text_embedding, 'Y')
+                        pgvector_handler.add_vector_sql_collection(cfg.dataset_id, sql_query['Question'], sql_query['SQL Query'], question_text_embedding, 'Y')
                 except yaml.YAMLError as exc:
                     logger.error("Error loading YAML file containing sample questions: " + exc)
                     logger.error("Skipping sample ingestion")
@@ -246,11 +246,11 @@ logger = logging.getLogger('init_pgvector')
 # Add the pgvector extension to the Cloud SQL instance
 pgvector_handler.add_pgvector_extension()
 
-# Create indexes on the tables
-pgvector_handler.create_indexes()
-
 # Create tables
 pgvector_handler.create_tables()
+
+# Create indexes on the tables
+pgvector_handler.create_indexes()
 
 # Build table schemas and populate the pgVector database
 init_table_and_columns_desc()

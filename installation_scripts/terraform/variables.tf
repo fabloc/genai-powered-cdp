@@ -32,3 +32,8 @@ variable "db_user_password" {
   description = "PgVector User Password"
   type        = string
 }
+
+variable "provisioning_ip_address" {
+  description = "Public IP address used to initialize the Cloud SQL for posgreSQL instance. It will be added as authorized IP to access the instance"
+  type        = string
+}

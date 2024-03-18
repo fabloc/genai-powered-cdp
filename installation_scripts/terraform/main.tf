@@ -52,9 +52,16 @@ resource "google_sql_database_instance" "pgvector_db" {
   settings {
     tier = "db-f1-micro"
     ip_configuration {
-      ipv4_enabled    = false // Enforce private IP only
+      ipv4_enabled    = true // Allow public IP address, only during initialization phase, it will be removed after completion
+      require_ssl     = true
       private_network = google_compute_network.cdp_vpc.id
       enable_private_path_for_google_cloud_services = true
+
+      authorized_networks {
+        value           = var.provisioning_ip_address
+        name            = "provisioning-access"
+      }
+
     }
   }
 }
