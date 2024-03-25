@@ -107,7 +107,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
     logger.info("Searching for similar questions in DB...")
     start_time = time.time()
     # Look into Vector for similar queries. Similar queries will be added to the LLM prompt (few shot examples)
-    similar_questions = pgvector_handler.search_sql_nearest_vector(cfg.schema, question, question_text_embedding, 'Y')
+    similar_questions = pgvector_handler.search_sql_nearest_vector(question, question_text_embedding, 'Y')
 
     metrics['similar_questions_duration'] = time.time() - start_time
     if len(similar_questions) == 0:
@@ -268,7 +268,7 @@ def call_gen_sql(question, streamlit_status: StatusContainer):
         #### Adding to the Known Good SQL Vector DB
         logger.info("Adding Known Good SQL to Vector DB...")
         start_time = time.time()
-        pgvector_handler.add_vector_sql_collection(cfg.schema, question, generated_sql, question_text_embedding, 'Y')
+        pgvector_handler.add_vector_sql_collection(question, generated_sql, question_text_embedding, 'Y')
         metrics['sql_added_to_vector_db_duration'] = time.time() - start_time
         logger.info('SQL added to Vector DB')
 

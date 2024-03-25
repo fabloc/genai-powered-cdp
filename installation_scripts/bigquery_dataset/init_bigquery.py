@@ -30,6 +30,8 @@ data = {
 
 users_schema_path = base_path / "users_schema.json"
 products_schema_path = base_path / "products_schema.json"
+user_aggregates_schema_path = base_path / "user_aggregates_schema.json"
+product_aggregates_schema_path = base_path / "product_aggregates_schema.json"
 sql_file_path = base_path / "bigquery_demo_dataset.sql"
 
 try:
@@ -103,6 +105,22 @@ load_job = client.load_table_from_uri(
 
 load_job.result()  # Waits for the job to complete.
 print("Successfully imported Products table.")
+
+# Create user_aggregates table using JSON schema
+# To load a schema file use the schema_from_json method.
+user_aggregates_schema = client.schema_from_json(user_aggregates_schema_path)
+
+user_aggregates_table = bigquery.Table(project_id + '.' + dataset_id + '.user_aggregates', schema=user_aggregates_schema)
+user_aggregates_table.description = "Table listing all products along with their purchasing activity. For each product, global attributes are available, like money spent in total, number of items purchased in total and last purchase date. But also daily aggregated data like number of product items or money spent for this product. This table is used for queries related to products, brands or categories."
+table = client.create_table(user_aggregates_table)
+
+# Create product_aggregates table using JSON schema
+# To load a schema file use the schema_from_json method.
+product_aggregates_schema = client.schema_from_json(product_aggregates_schema_path)
+
+product_aggregates_table = bigquery.Table(project_id + '.' + dataset_id + '.product_aggregates', schema=product_aggregates_schema)
+product_aggregates_table.description = "Table listing all products along with their purchasing activity. For each product, global attributes are available, like money spend spent in total, number of items purchased in total and last purchase date. But also daily aggregated data like number of product items or money spent for this product. This table is used for queries related to products, brands or categories."
+table = client.create_table(product_aggregates_table)
 
 # Reading SQL script from the file
 with open(sql_file_path, "r") as sql_file:

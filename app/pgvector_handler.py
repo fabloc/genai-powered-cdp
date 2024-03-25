@@ -313,7 +313,7 @@ def search_sql_vector_by_id(schema, question, valid):
 #logger.info(res)
 
 
-def search_sql_nearest_vector(schema, question, question_text_embedding, valid):
+def search_sql_nearest_vector(question, question_text_embedding, valid):
     from sqlalchemy.sql import text
 
     msg='Examples:\n'
@@ -333,7 +333,7 @@ def search_sql_nearest_vector(schema, question, question_text_embedding, valid):
             )
             SELECT id, question, generated_sql, similarity
             FROM vector_matches
-            where table_schema=\'{schema}\'
+            where table_schema=\'{cfg.dataset_id}\'
             and requestor=\'{cfg.auth_user}\'
             and table_catalog=\'{cfg.project_id}\'
             '''
@@ -359,7 +359,7 @@ def search_sql_nearest_vector(schema, question, question_text_embedding, valid):
 # logger.info( ret )
 
 
-def add_vector_sql_collection(schema, question, final_sql, question_text_embedding, valid):
+def add_vector_sql_collection(question, final_sql, question_text_embedding, valid):
     from datetime import datetime, timezone
     import hashlib
     import time
@@ -369,7 +369,7 @@ def add_vector_sql_collection(schema, question, final_sql, question_text_embeddi
     requestor=str(cfg.auth_user)
 
     # Define ID ... hashed value of the question+requestor+schema
-    q_value=str(cfg.project_id) + '.' + str(cfg.source_type) + '.' + str(requestor) + '.' + str(schema) + '.' + str(question) + '.' + str(valid)
+    q_value=str(cfg.project_id) + '.' + str(cfg.source_type) + '.' + str(requestor) + '.' + str(cfg.dataset_id) + '.' + str(question) + '.' + str(valid)
     hash_object = hashlib.md5(str(q_value).encode())
     hex_dig = hash_object.hexdigest()
     idx=str(hex_dig)
@@ -383,7 +383,7 @@ def add_vector_sql_collection(schema, question, final_sql, question_text_embeddi
             \'{final_sql.replace("'","''")} \',
             \'{str(requestor).replace("'","''")}\',
             \'{str(cfg.project_id).replace("'","''")}\',
-            \'{schema}\',
+            \'{cfg.dataset_id}\',
             \'{epoch_time}\',
             \'{cfg.source_type}\',
             \'{question_text_embedding}\')

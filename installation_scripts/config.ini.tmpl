@@ -7,11 +7,10 @@ auth_user =
 # TABLES contain the tables to be used for SQL generation.
 # Enter an empty table list when all tables in the dataset should be used
 source_type = BigQuery
-# tables = ["hll_user_aggregates"]
 # BQ Project and Dataset where tables live
 project_id_data =
 dataset_id =
-tables = ["hll_user_aggregates", "products_aggregates"]
+tables = ["user_aggregates", "product_aggregates"]
 user_dataset = ${project_id_data}.${dataset_id}
 
 [EXECUTION]
