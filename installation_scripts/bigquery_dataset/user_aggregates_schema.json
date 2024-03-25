@@ -1,0 +1,130 @@
+[
+    {
+        "description": "Id of the user - Scope: global",
+        "name": "user_id",
+        "type": "STRING"
+    },
+    {
+        "description": "Age of the user - Scope: global",
+        "name": "age",
+        "type": "INTEGER"
+    },
+    {
+        "description": "Gender of the user. Values can be either 'M' for male or 'F' for female - Scope: global",
+        "name": "gender",
+        "type": "STRING"
+    },
+    {
+        "description": "Country of the user - Scope: global",
+        "name": "country",
+        "type": "STRING"
+    },
+    {
+        "description": "Total number of items purchased by the user. This column can be used when trying to identify users that purchased a certain amount of products for all brands not related to a time range - Scope: global",
+        "name": "total_purchased_items",
+        "type": "INTEGER"
+    },
+    {
+        "description": "Total money spent by the user. This column can be used when trying to identify users that spent a given amount of money for all brands, not related to a time range - Scope: global",
+        "name": "total_spend",
+        "type": "FLOAT"
+    },
+    {
+        "description": "Date of the first purchase made by the user. The first purchase can be of any brand - Scope: global",
+        "name": "first_purchase_date",
+        "type": "TIMESTAMP"
+    },
+    {
+        "description": "Date of the last purchase made by the user. The last purchase can be of any brand - Scope: global",
+        "name": "last_purchase_date",
+        "type": "TIMESTAMP"
+    },
+    {
+        "description": "Day used for data aggregation in column with 'time-dependent' scope. This column must be used for all queries that involve a time range - Scope: time-dependent",
+        "name": "session_day",
+        "type": "TIMESTAMP"
+    },
+    {
+        "description": "Number of items purchased by the user across all brands during one day. This column can be used when finding users that purchase a certain amount of products during a time range, or products that have been most or least purchased during a certain time range - Scope: time-dependent",
+        "name": "daily_purchased_items",
+        "type": "INTEGER"
+    },
+    {
+        "description": "Money spent by the user across all brands during one day. This column can be used to identify users who spent a certain amount of money during a specific time range. It gives information about the spending behavior of the user - Scope: time-dependent",
+        "name": "daily_spend",
+        "type": "FLOAT"
+    },
+    {
+        "description": "This column stores an array of structs, where each struct represents a product purchased by the user during one day identified by 'session_day' - Scope: time-dependent",
+        "fields": [
+            {
+                "description": "Brand of the products purchased by the user during one day - Scope: time-dependent",
+                "name": "brand_name",
+                "type": "STRING"
+            },
+            {
+                "description": "Category of the brand purchased by the user during one day - Scope: time-dependent",
+                "name": "category",
+                "type": "STRING"
+            },
+            {
+                "description": "List of product_id for products purchased by the user for the brand during one day - Scope: time-dependent",
+                "mode": "REPEATED",
+                "name": "product_ids",
+                "type": "INTEGER"
+            },
+            {
+                "description": "Number of items purchased by the user for the brand during one day - Scope: time-dependent",
+                "name": "purchased_items",
+                "type": "INTEGER"
+            },
+            {
+                "description": "Money spent by the user for the brand during one day - Scope: time-dependent",
+                "name": "brand_spend",
+                "type": "FLOAT"
+            }
+        ],
+        "mode": "REPEATED",
+        "name": "daily_purchased_products_by_brands",
+        "type": "RECORD"
+    },
+    {
+        "description": "Array of structs, where each struct represents all products purchased by the user for a given brand, across the whole user lifetime - Scope: global",
+        "fields": [
+            {
+                "description": "Brand name - Scope: global",
+                "name": "brand_name",
+                "type": "STRING"
+            },
+            {
+                "description": "Category of the brand - Scope: global",
+                "name": "category",
+                "type": "STRING"
+            },
+            {
+                "description": "Total number of items purchased by the user for the brand - Scope: global",
+                "name": "purchased_items",
+                "type": "INTEGER"
+            },
+            {
+                "description": "List of all product_id for products purchased by the user for the brand - Scope: global",
+                "mode": "REPEATED",
+                "name": "product_ids",
+                "type": "INTEGER"
+            },
+            {
+                "description": "Total amount of money spent by the user for the brand - Scope: global",
+                "name": "brand_spend",
+                "type": "FLOAT"
+            }
+        ],
+        "mode": "REPEATED",
+        "name": "total_purchased_products_by_brands",
+        "type": "RECORD"
+    },
+    {
+        "description": "Flag indicating whether the user has an abandoned cart (he has added an item to his cart but didn't purchased it). Values can be 'true' or 'false'. This column can be used to identify users who have abandoned their shopping carts and target them with personalized marketing campaigns to encourage them to complete their purchases. It can also be used to analyze user behavior patterns and identify trends in cart abandonment rates - Scope: global",
+        "name": "has_abandoned_cart",
+        "type": "BOOLEAN"
+    }
+]

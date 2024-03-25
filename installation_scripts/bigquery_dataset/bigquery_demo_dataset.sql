@@ -152,8 +152,319 @@ AS (
     -- Unnest the array of session 'sessions', and then unnest the events inside the sessions
     UNNEST(sessions) AS flat_sessions,
     UNNEST(flat_sessions.session) AS session_events
-  LEFT JOIN {{ dataset_id }}.products AS products
+  LEFT JOIN `{{ dataset_id }}.products` AS products
   ON session_events.product_id = products.id
   GROUP BY user_id, session_id, session_created_at, traffic_source
 
+);
+
+
+-----------------------------------------------------------------------------------------------
+-- Create first aggregated table, aggregated at a daily scope
+CREATE OR REPLACE TABLE `{{ dataset_id }}.user_aggregates_daily`
+PARTITION BY
+  DATE(session_day)
+AS (
+
+WITH
+-- Find the number of items purchased by a customer
+-- Find total money spent by a customer for all items
+-- Find all product categories purchased by the customer, and how many items/spend for each one TODO
+users_purchases AS (
+  SELECT
+    user_id,
+    DATETIME_TRUNC(session_created_at, DAY) AS session_day,
+    session_flat.cost AS item_cost,
+    session_flat.brand AS brand_name,
+    session_flat.product_id,
+    session_flat.category AS category
+  FROM `{{ dataset_id }}.events` AS events,
+  UNNEST(session) AS session_flat
+  WHERE total_cost > 0 and cost > 0
+),
+
+daily_users_products AS (
+  SELECT
+    user_id,
+    session_day,
+    STRUCT(
+      brand_name,
+      category,
+      product_ids,
+      purchased_items,
+      brand_spend
+    ) brands
+  FROM (
+    SELECT
+      user_id,
+      session_day,
+      brand_name,
+      STRING_AGG(DISTINCT category) as category,
+      ARRAY_AGG(DISTINCT product_id) AS product_ids,
+      COUNT(1) AS purchased_items,
+      SUM(item_cost) AS brand_spend
+    FROM users_purchases
+    GROUP BY user_id, session_day, brand_name
+  )
+),
+
+daily_user_orders AS (
+  SELECT
+    users_purchases.session_day,
+    users_purchases.user_id,
+    daily_purchased_items,
+    daily_spend,
+    ARRAY_AGG(
+      daily_users_products.brands
+    ) daily_purchased_products_by_brands
+  FROM (
+    SELECT
+      user_id,
+      session_day,
+      COUNT(item_cost) AS daily_purchased_items,
+      SUM(item_cost) AS daily_spend
+    FROM users_purchases
+    GROUP BY user_id, session_day
+  ) AS users_purchases
+  JOIN daily_users_products
+  ON users_purchases.user_id = daily_users_products.user_id
+  WHERE users_purchases.session_day = daily_users_products.session_day
+  GROUP BY users_purchases.user_id, users_purchases.session_day, daily_purchased_items, daily_spend
 )
+
+SELECT
+  id,
+  session_day,
+  daily_purchased_items,
+  daily_spend,
+  daily_purchased_products_by_brands
+FROM `{{ dataset_id }}.users` as users
+LEFT JOIN daily_user_orders ON users.id = daily_user_orders.user_id
+
+);
+
+
+-----------------------------------------------------------------------------------------------
+-- Create Global Aggregated Table
+CREATE OR REPLACE TABLE `{{ dataset_id }}.user_aggregates_global` AS
+
+WITH
+
+-- Find the number of items purchased by a customer
+-- Find total money spent by a customer for all items
+-- Find all product categories purchased by the customer, and how many items/spend for each one TODO
+users_purchases AS (
+  SELECT
+    user_id,
+    total_cost,
+    session_created_at,
+    session_flat.cost AS item_cost,
+    session_flat.product_id,
+    session_flat.brand AS brand_name,
+    session_flat.category AS category
+  FROM `{{ dataset_id }}.events` AS events,
+  UNNEST(session) AS session_flat
+  WHERE total_cost > 0 and cost > 0
+),
+
+global_users_products AS (
+  SELECT
+    user_id,
+    STRUCT(
+      brand_name,
+      category,
+      purchased_items,
+      product_ids,
+      brand_spend
+    ) brands
+  FROM (
+    SELECT
+      user_id,
+      brand_name,
+      STRING_AGG(DISTINCT category) as category,
+      ARRAY_AGG(DISTINCT product_id) AS product_ids,
+      COUNT(1) AS purchased_items,
+      SUM(item_cost) AS brand_spend
+    FROM users_purchases
+    GROUP BY user_id, brand_name
+  )
+),
+
+global_user_orders AS (
+  SELECT
+    users_purchases.user_id,
+    total_purchased_items,
+    total_spend,
+    first_purchase_date,
+    last_purchase_date,
+    ARRAY_AGG(
+      global_users_products.brands
+    ) total_purchased_products_by_brands
+  FROM (
+    SELECT
+      user_id,
+      COUNT(item_cost) AS total_purchased_items,
+      SUM(item_cost) AS total_spend,
+      MIN(session_created_at) first_purchase_date,
+      MAX(session_created_at) last_purchase_date
+    FROM users_purchases
+    GROUP BY user_id
+  ) AS users_purchases
+  JOIN global_users_products
+  ON users_purchases.user_id = global_users_products.user_id
+  GROUP BY users_purchases.user_id, total_purchased_items, total_spend, first_purchase_date, last_purchase_date
+),
+
+-- Find the latest session with products added to cart
+users_with_cart AS
+(
+  SELECT
+    session_id,
+    user_id,
+    MAX(session_created_at) session_created_at
+  FROM `{{ dataset_id }}.events` 
+  WHERE 'cart' IN (SELECT event_type FROM UNNEST(session))
+  GROUP BY user_id, session_id
+),
+
+-- Find the latest session with purchase
+users_with_purchase AS
+(
+  SELECT
+    user_id,
+    MAX(session_created_at) session_created_at
+  FROM `{{ dataset_id }}.events`
+  WHERE 'purchase' IN (SELECT event_type FROM UNNEST(session))
+  GROUP BY user_id
+),
+
+-- Identify users with items added to carts done after the latest purchase
+users_with_abandoned_cart AS
+(
+  SELECT
+    users_with_cart.user_id,
+    users_with_cart.session_id
+  FROM users_with_cart
+  LEFT JOIN users_with_purchase ON users_with_cart.user_id = users_with_purchase.user_id
+  WHERE users_with_cart.session_created_at > users_with_purchase.session_created_at
+)
+
+SELECT
+  id,
+  age,
+  gender,
+  country,
+  total_purchased_items,
+  total_spend,
+  first_purchase_date,
+  last_purchase_date,
+  total_purchased_products_by_brands,
+  IF(IFNULL(users_with_abandoned_cart.session_id, 'NULL') != 'NULL', true, false) AS has_abandoned_cart
+FROM `{{ dataset_id }}.users` as users
+LEFT JOIN global_user_orders ON users.id = global_user_orders.user_id
+LEFT JOIN users_with_abandoned_cart ON users.id = users_with_abandoned_cart.user_id;
+
+
+-----------------------------------------------------------------------------------------------
+-- Append to the user_aggregates table based on the daily and global aggregated tables above
+INSERT `{{ dataset_id }}.user_aggregates`
+SELECT
+  global.id AS user_id,
+  age,
+  gender,
+  country,
+  total_purchased_items,
+  total_spend,
+  first_purchase_date,
+  last_purchase_date,
+  session_day,
+  daily_purchased_items,
+  daily_spend,
+  ARRAY_CONCAT_AGG(daily_purchased_products_by_brands) AS daily_purchased_products_by_brands,
+  ARRAY_CONCAT_AGG(total_purchased_products_by_brands) AS total_purchased_products_by_brands,
+  has_abandoned_cart
+FROM `{{ dataset_id }}.user_aggregates_global` AS global
+JOIN `{{ dataset_id }}.user_aggregates_daily` AS daily
+ON global.id = daily.id
+GROUP BY
+  user_id,
+  age,
+  gender,
+  country,
+  total_purchased_items,
+  total_spend,
+  first_purchase_date,
+  last_purchase_date,
+  session_day,
+  daily_spend,
+  daily_purchased_items,
+  has_abandoned_cart;
+
+
+-----------------------------------------------------------------------------------------------
+-- Create an intermediate aggregated product table, with daily aggregation granularity
+CREATE OR REPLACE TABLE `{{ dataset_id }}.product_aggregates_daily`
+PARTITION BY
+  DATE(session_day)
+AS (
+
+  SELECT
+    session_flat.product_id AS product_id,
+    session_flat.name AS product_name,
+    session_flat.brand AS brand_name,
+    session_flat.category AS category,
+    DATETIME_TRUNC(session_created_at, DAY) AS session_day,
+    COUNT(session_flat.cost) AS daily_product_purchased_items,
+    SUM(CAST(session_flat.cost AS NUMERIC)) AS daily_product_spend
+  FROM `{{ dataset_id }}.events` AS events,
+  UNNEST(session) AS session_flat
+  WHERE cost > 0
+  GROUP BY product_id, product_name, brand_name, category, session_day
+);
+
+
+-----------------------------------------------------------------------------------------------
+-- Create an intermediate aggregated product table, providing global aggregated columns
+CREATE OR REPLACE TABLE `{{ dataset_id }}.product_aggregates_global` AS
+SELECT
+     session_flat.product_id AS product_id,
+     session_flat.name AS product_name,
+     session_flat.brand AS brand_name,
+     session_flat.category AS category,
+     COUNT(1) AS product_total_purchased_items,
+     SUM(CAST(session_flat.cost AS NUMERIC)) AS product_total_spend,
+     MAX(session_created_at) last_product_purchase_date
+FROM `{{ dataset_id }}.events` AS events,
+UNNEST(session) AS session_flat
+WHERE product_id != 0
+GROUP BY product_id, product_name, brand_name, category; 
+
+
+-----------------------------------------------------------------------------------------------
+-- Create final aggregated products table based on the daily and global aggregated tables above
+INSERT `{{ dataset_id }}.product_aggregates`
+SELECT
+  global.product_id AS product_id,
+  global.product_name AS product_name,
+  global.brand_name AS brand_name,
+  global.category AS category,
+  product_total_purchased_items,
+  product_total_spend,
+  last_product_purchase_date,
+  session_day,
+  daily_product_purchased_items,
+  daily_product_spend
+FROM `{{ dataset_id }}.product_aggregates_global` AS global
+JOIN `{{ dataset_id }}.product_aggregates_daily` AS daily
+ON global.product_id = daily.product_id
+GROUP BY
+  product_id,
+  product_name,
+  brand_name,
+  category,
+  product_total_purchased_items,
+  product_total_spend,
+  last_product_purchase_date,
+  session_day,
+  daily_product_purchased_items,
+  daily_product_spend;

@@ -1,0 +1,52 @@
+[
+    {
+        "description": "Id of the product - Scope: both",
+        "name": "product_id",
+        "type": "INTEGER"
+    },
+    {
+        "description": "Name of the product - Scope: both",
+        "name": "product_name",
+        "type": "STRING"
+    },
+    {
+        "description": "Brand of the product - Scope: both",
+        "name": "brand_name",
+        "type": "STRING"
+    },
+    {
+        "description": "Category of the product - Scope: both",
+        "name": "category",
+        "type": "STRING"
+    },
+    {
+        "description": "Total number of product items purchased - Scope: global",
+        "name": "product_total_purchased_items",
+        "type": "INTEGER"
+    },
+    {
+        "description": "Total amount of money spent - Scope: global",
+        "name": "product_total_spend",
+        "type": "FLOAT"
+    },
+    {
+        "description": "Last date the product was purchased - Scope: global",
+        "name": "last_product_purchase_date",
+        "type": "TIMESTAMP"
+    },
+    {
+        "description": "Day used for data aggregation in columns with 'time-dependent' scope. This column must be used for all queries that involves a time range - Scope: time-dependent",
+        "name": "session_day",
+        "type": "TIMESTAMP"
+    },
+    {
+        "description": "Total number of items purchased for this product during one day - Scope: time-dependent",
+        "name": "daily_product_purchased_items",
+        "type": "INTEGER"
+    },
+    {
+        "description": "Money spent on this product during one day - Scope: time-dependent",
+        "name": "daily_product_spend",
+        "type": "FLOAT"
+    }
+]
