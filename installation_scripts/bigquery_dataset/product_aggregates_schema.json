@@ -48,5 +48,15 @@
         "description": "Money spent on this product during one day - Scope: time-dependent",
         "name": "daily_product_spend",
         "type": "FLOAT"
+    },
+    {
+        "description": "Country where the product was bought - Scope: both",
+        "name": "country",
+        "type": "STRING"
+    },
+    {
+        "description": "Event (email, etc.) that triggered the visit of the user on the website - Scope: both",
+        "name": "traffic_source",
+        "type": "STRING"
     }
 ]

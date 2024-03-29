@@ -94,6 +94,7 @@ AS (
   products_by_users AS (
     SELECT
       users.id AS user_id,
+      users.country AS country,
       -- Each session is a Struct of attribute, among which an Array containing the events for the session, generated using a javascript script
       ARRAY(
         -- Use a SubQuery to precompute the session creation date and reuse it as input to the session events generation UDF
@@ -118,6 +119,7 @@ AS (
 
   SELECT
     user_id,
+    country,
     session_id,
     traffic_source,
     flat_sessions.session_created_at AS session_created_at,
@@ -154,7 +156,7 @@ AS (
     UNNEST(flat_sessions.session) AS session_events
   LEFT JOIN `{{ dataset_id }}.products` AS products
   ON session_events.product_id = products.id
-  GROUP BY user_id, session_id, session_created_at, traffic_source
+  GROUP BY user_id, country, session_id, session_created_at, traffic_source
 
 );
 
@@ -414,12 +416,14 @@ AS (
     session_flat.brand AS brand_name,
     session_flat.category AS category,
     DATETIME_TRUNC(session_created_at, DAY) AS session_day,
+    events.country AS country,
+    events.traffic_source AS traffic_source,
     COUNT(session_flat.cost) AS daily_product_purchased_items,
     SUM(CAST(session_flat.cost AS NUMERIC)) AS daily_product_spend
   FROM `{{ dataset_id }}.events` AS events,
   UNNEST(session) AS session_flat
   WHERE cost > 0
-  GROUP BY product_id, product_name, brand_name, category, session_day
+  GROUP BY product_id, product_name, brand_name, category, session_day, country, traffic_source
 );
 
 
@@ -453,18 +457,9 @@ SELECT
   last_product_purchase_date,
   session_day,
   daily_product_purchased_items,
-  daily_product_spend
+  daily_product_spend,
+  country,
+  traffic_source
 FROM `{{ dataset_id }}.product_aggregates_global` AS global
 JOIN `{{ dataset_id }}.product_aggregates_daily` AS daily
 ON global.product_id = daily.product_id
-GROUP BY
-  product_id,
-  product_name,
-  brand_name,
-  category,
-  product_total_purchased_items,
-  product_total_spend,
-  last_product_purchase_date,
-  session_day,
-  daily_product_purchased_items,
-  daily_product_spend;
